@@ -3,6 +3,8 @@ import type {
   Cell,
   ChainLink,
   Cutter,
+  FocusState,
+  HostCore,
   KnotCandidate,
   KnotState,
   ObserverAttack,
@@ -13,7 +15,7 @@ import type {
 import { clamp, normalize, type Vec2 } from "../geometry/vector";
 
 export type RenderSnapshot = {
-  phase: "menu" | "playing" | "reveal" | "observer" | "ending";
+  phase: "menu" | "playing" | "paused" | "reveal" | "observer" | "ending";
   time: number;
   player: Player;
   chain: ChainLink[];
@@ -22,8 +24,10 @@ export type RenderSnapshot = {
   scars: Scar[];
   particles: Particle[];
   cutter: Cutter | null;
+  hostCore: HostCore | null;
   knot: KnotState;
   candidate: KnotCandidate | null;
+  focus: FocusState;
   chainWave: number;
   observerAttacks: ObserverAttack[];
   mouseScreen: Vec2;
@@ -75,6 +79,17 @@ export class CanvasRenderer {
     };
   }
 
+  isScreenInsideWorld(point: Vec2): boolean {
+    const size = WORLD_SIZE * this.scale;
+
+    return (
+      point.x >= this.offset.x &&
+      point.x <= this.offset.x + size &&
+      point.y >= this.offset.y &&
+      point.y <= this.offset.y + size
+    );
+  }
+
   worldToScreen(point: Vec2): Vec2 {
     return {
       x: this.offset.x + point.x * this.scale,
@@ -99,11 +114,14 @@ export class CanvasRenderer {
     this.drawBackground(snapshot);
     this.drawScars(snapshot.scars);
     this.drawGhost(snapshot);
+    this.drawHostCore(snapshot);
     this.drawCells(
       snapshot.cells,
       snapshot.time,
-      snapshot.phase !== "playing",
+      snapshot.phase === "observer" || snapshot.phase === "ending",
       new Set(snapshot.candidate?.cellIds ?? []),
+      new Set(snapshot.focus.influencedIds),
+      snapshot.focus.world,
     );
     this.drawCutterTelegraph(snapshot);
     this.drawKnot(snapshot);
@@ -112,6 +130,7 @@ export class CanvasRenderer {
     this.drawChain(snapshot.severed, true, 0);
     this.drawCutter(snapshot.cutter, snapshot.time);
     this.drawPlayer(snapshot.player, snapshot.phase === "observer");
+    this.drawFocus(snapshot);
     this.drawParticles(snapshot.particles);
     this.drawCursorPresence(snapshot);
 
@@ -221,11 +240,88 @@ export class CanvasRenderer {
     context.restore();
   }
 
+  private drawHostCore(snapshot: RenderSnapshot) {
+    const core = snapshot.hostCore;
+
+    if (!core) {
+      return;
+    }
+
+    const { context } = this;
+    const screen = this.worldToScreen(core.pos);
+    const bind = core.state === "binding" ? core.bindProgress : 0;
+    const pulse = snapshot.reducedMotion
+      ? 0.2
+      : 0.5 + Math.sin(snapshot.time * 5 + core.pulse) * 0.5;
+    const radius =
+      core.radius * this.scale * (1 + pulse * 0.08) * (1 - bind * 0.28);
+    context.save();
+    context.translate(screen.x, screen.y);
+
+    const glow = context.createRadialGradient(0, 0, 2, 0, 0, radius * 2.9);
+    glow.addColorStop(0, `rgba(198, 244, 244, ${0.18 + pulse * 0.08})`);
+    glow.addColorStop(0.42, "rgba(100, 18, 28, 0.24)");
+    glow.addColorStop(1, "transparent");
+    context.fillStyle = glow;
+    context.fillRect(-radius * 3, -radius * 3, radius * 6, radius * 6);
+
+    if (snapshot.phase === "observer") {
+      context.save();
+      context.globalAlpha = 0.36 + pulse * 0.18;
+      context.strokeStyle = "#c8ffff";
+      context.lineWidth = 1.6;
+      context.setLineDash([10, 9]);
+      context.beginPath();
+      context.ellipse(
+        0,
+        0,
+        radius * 2.35,
+        radius * 1.45,
+        -0.48,
+        -Math.PI * 0.15,
+        Math.PI * 1.35,
+      );
+      context.stroke();
+      context.restore();
+    }
+
+    context.rotate(snapshot.time * 0.24);
+    context.fillStyle = core.state === "bound" ? "#eafcff" : "#1a060a";
+    context.strokeStyle = core.state === "bound" ? "#eaffff" : "#d6404f";
+    context.lineWidth = 2.4;
+    context.beginPath();
+
+    for (let index = 0; index < 12; index += 1) {
+      const angle = (index / 12) * Math.PI * 2;
+      const pointRadius = radius * (index % 2 === 0 ? 1.08 : 0.7);
+      const x = Math.cos(angle) * pointRadius;
+      const y = Math.sin(angle) * pointRadius;
+
+      if (index === 0) {
+        context.moveTo(x, y);
+      } else {
+        context.lineTo(x, y);
+      }
+    }
+
+    context.closePath();
+    context.fill();
+    context.stroke();
+    context.strokeStyle = "#f0ffff99";
+    context.lineWidth = 1.2;
+    context.beginPath();
+    context.ellipse(0, 0, radius * 0.42, radius * 0.72, 0.2, 0, Math.PI * 2);
+    context.stroke();
+    context.restore();
+  }
+
   private drawCells(
     cells: Cell[],
     time: number,
     red: boolean,
     candidateCellIds: Set<number>,
+    focusCellIds: Set<number>,
+    focusWorld: Vec2,
   ) {
     const { context } = this;
 
@@ -238,12 +334,32 @@ export class CanvasRenderer {
       context.scale(pulse, pulse);
 
       const isCandidate = candidateCellIds.has(cell.id);
+      const isFocused = focusCellIds.has(cell.id);
 
-      if (cell.highlighted || isCandidate) {
-        context.strokeStyle = isCandidate ? "#a8fbffcc" : "#c9fbff77";
-        context.lineWidth = isCandidate ? 2.4 : 1.6;
+      if (isFocused) {
+        const lean = normalize({
+          x: focusWorld.x - cell.pos.x,
+          y: focusWorld.y - cell.pos.y,
+        });
+        context.translate(lean.x * radius * 0.18, lean.y * radius * 0.18);
+        context.rotate(Math.atan2(lean.y, lean.x) * 0.08);
+      }
+
+      if (cell.highlighted || isCandidate || isFocused) {
+        context.strokeStyle = isCandidate
+          ? "#a8fbffcc"
+          : isFocused
+            ? "#d6dedc88"
+            : "#c9fbff77";
+        context.lineWidth = isCandidate ? 2.4 : isFocused ? 1.3 : 1.6;
         context.beginPath();
-        context.arc(0, 0, radius * (isCandidate ? 2.12 : 1.62), 0, Math.PI * 2);
+        context.arc(
+          0,
+          0,
+          radius * (isCandidate ? 2.12 : isFocused ? 1.85 : 1.62),
+          0,
+          Math.PI * 2,
+        );
         context.stroke();
       }
 
@@ -394,7 +510,7 @@ export class CanvasRenderer {
     context.lineCap = "round";
     context.lineJoin = "round";
 
-    if (candidate.cellIds.length > 0 && candidate.polygon.length > 2) {
+    if (candidate.previewCount > 0 && candidate.polygon.length > 2) {
       context.globalAlpha = 0.08 + pulse * 0.05;
       context.fillStyle = snapshot.highContrast ? "#ffffff" : "#9cf2ff";
       context.beginPath();
@@ -428,7 +544,7 @@ export class CanvasRenderer {
     const point = this.worldToScreen(candidate.point);
     context.translate(point.x, point.y);
     context.rotate(candidate.pulse * 0.35);
-    context.strokeStyle = candidate.cellIds.length > 0 ? "#eaffff" : "#91a7aa";
+    context.strokeStyle = candidate.previewCount > 0 ? "#eaffff" : "#91a7aa";
     context.lineWidth = 2;
     const marker = 8 + pulse * 5;
     context.beginPath();
@@ -440,6 +556,20 @@ export class CanvasRenderer {
     context.beginPath();
     context.arc(0, 0, marker * 1.35, -Math.PI * 0.25, Math.PI * 1.15);
     context.stroke();
+
+    if (candidate.previewCount > 0) {
+      context.rotate(-candidate.pulse * 0.35);
+      context.font = "900 12px Arial, Helvetica, sans-serif";
+      context.textAlign = "center";
+      context.textBaseline = "middle";
+      context.fillStyle = "#eaffff";
+      context.strokeStyle = "#020304";
+      context.lineWidth = 4;
+      const text = `x${candidate.previewCount}`;
+      context.strokeText(text, 0, -marker * 2.9);
+      context.fillText(text, 0, -marker * 2.9);
+    }
+
     context.restore();
   }
 
@@ -505,16 +635,38 @@ export class CanvasRenderer {
     const { context } = this;
     const start = this.worldToScreen(a.pos);
     const end = this.worldToScreen(b.pos);
+    const cutter = this.worldToScreen(snapshot.cutter.pos);
+    const targetPoint = this.worldToScreen(target.point);
     const pulse = snapshot.reducedMotion
       ? 0.7
       : 0.45 + Math.sin(snapshot.time * 12) * 0.25;
+    const charge = clamp(snapshot.cutter.telegraph / 1.12, 0, 1);
     context.save();
     context.lineCap = "round";
-    context.strokeStyle = `rgba(226, 43, 62, ${0.45 + pulse})`;
+    context.strokeStyle = `rgba(226, 43, 62, ${0.18 + pulse * 0.35})`;
+    context.lineWidth = 1.5;
+    context.setLineDash([6, 7]);
+    context.beginPath();
+    context.moveTo(cutter.x, cutter.y);
+    context.lineTo(targetPoint.x, targetPoint.y);
+    context.stroke();
+    context.setLineDash([]);
+    context.strokeStyle = `rgba(226, 43, 62, ${0.38 + pulse})`;
     context.lineWidth = 8;
     context.beginPath();
     context.moveTo(start.x, start.y);
     context.lineTo(end.x, end.y);
+    context.stroke();
+    context.strokeStyle = "#f07b86";
+    context.lineWidth = 2;
+    context.beginPath();
+    context.arc(
+      cutter.x,
+      cutter.y,
+      18,
+      -Math.PI / 2,
+      -Math.PI / 2 + charge * Math.PI * 2,
+    );
     context.stroke();
 
     context.restore();
@@ -589,6 +741,86 @@ export class CanvasRenderer {
     context.restore();
   }
 
+  private drawFocus(snapshot: RenderSnapshot) {
+    const focus = snapshot.focus;
+
+    if (!focus.active && snapshot.phase !== "observer") {
+      return;
+    }
+
+    const { context } = this;
+    const red = snapshot.phase === "observer";
+    const strong = focus.influencedIds.length >= 3 || red;
+    const pulse = snapshot.reducedMotion
+      ? 0
+      : Math.sin(snapshot.time * (strong ? 8 : 4.2) + focus.pulse) * 2.5;
+    const ringRadius = red
+      ? 16 + pulse
+      : strong
+        ? 18 + pulse
+        : 12 + pulse * 0.4;
+
+    context.save();
+
+    if (focus.active) {
+      const focusScreen = this.worldToScreen(focus.world);
+
+      for (const cellId of focus.influencedIds) {
+        const cell = snapshot.cells.find(
+          (candidate) => candidate.id === cellId,
+        );
+
+        if (!cell) {
+          continue;
+        }
+
+        const cellScreen = this.worldToScreen(cell.pos);
+        context.globalAlpha = 0.22;
+        context.strokeStyle = "#c7d1cf";
+        context.lineWidth = 1;
+        context.beginPath();
+        context.moveTo(focusScreen.x, focusScreen.y);
+        context.quadraticCurveTo(
+          (focusScreen.x + cellScreen.x) * 0.5 + Math.sin(cell.phase) * 5,
+          (focusScreen.y + cellScreen.y) * 0.5 + Math.cos(cell.phase) * 5,
+          cellScreen.x,
+          cellScreen.y,
+        );
+        context.stroke();
+      }
+
+      context.globalAlpha = 1;
+    }
+
+    context.translate(focus.screen.x, focus.screen.y);
+    context.strokeStyle = red
+      ? "#b72935dd"
+      : strong
+        ? "#d7dfddbb"
+        : "#b7c0c188";
+    context.lineWidth = red ? 2 : strong ? 1.5 : 1.1;
+    context.beginPath();
+    context.ellipse(
+      0,
+      0,
+      ringRadius,
+      ringRadius * (red ? 0.82 : 0.72),
+      snapshot.time * 0.18,
+      0,
+      Math.PI * 2,
+    );
+    context.stroke();
+
+    if (strong) {
+      context.globalAlpha = red ? 0.5 : 0.28;
+      context.beginPath();
+      context.arc(0, 0, ringRadius * 1.45, 0, Math.PI * 2);
+      context.stroke();
+    }
+
+    context.restore();
+  }
+
   private drawScars(scars: Scar[]) {
     const { context } = this;
 
@@ -632,28 +864,56 @@ export class CanvasRenderer {
     for (const attack of attacks) {
       const progress = 1 - attack.life / attack.maxLife;
       context.globalAlpha = clamp(attack.life / attack.maxLife, 0, 1);
-      context.strokeStyle = attack.hit ? "#ff4050" : "#8f1d29";
+      context.strokeStyle = attack.demo
+        ? "#d8d0c2aa"
+        : attack.hit
+          ? "#ff4050"
+          : "#e63848";
       context.lineWidth = attack.hit ? 5 : 2;
       context.beginPath();
       context.arc(
         attack.pos.x,
         attack.pos.y,
-        14 + progress * 74,
+        attack.hit ? 14 + progress * 74 : attack.radius + progress * 12,
         0,
         Math.PI * 2,
       );
       context.stroke();
+
+      if (!attack.hit) {
+        const charge = clamp(
+          (attack.maxLife - attack.life) / attack.telegraph,
+          0,
+          1,
+        );
+        context.globalAlpha = attack.demo ? 0.45 : 0.78;
+        context.beginPath();
+        context.arc(
+          attack.pos.x,
+          attack.pos.y,
+          attack.radius * 1.35,
+          -Math.PI / 2,
+          -Math.PI / 2 + Math.PI * 2 * charge,
+        );
+        context.stroke();
+        context.beginPath();
+        context.moveTo(attack.pos.x - attack.radius * 1.8, attack.pos.y);
+        context.lineTo(attack.pos.x - attack.radius * 0.7, attack.pos.y);
+        context.moveTo(attack.pos.x + attack.radius * 0.7, attack.pos.y);
+        context.lineTo(attack.pos.x + attack.radius * 1.8, attack.pos.y);
+        context.moveTo(attack.pos.x, attack.pos.y - attack.radius * 1.8);
+        context.lineTo(attack.pos.x, attack.pos.y - attack.radius * 0.7);
+        context.moveTo(attack.pos.x, attack.pos.y + attack.radius * 0.7);
+        context.lineTo(attack.pos.x, attack.pos.y + attack.radius * 1.8);
+        context.stroke();
+      }
     }
 
     context.globalAlpha = 1;
   }
 
   private drawCursorPresence(snapshot: RenderSnapshot) {
-    if (
-      snapshot.phase !== "playing" &&
-      snapshot.phase !== "reveal" &&
-      snapshot.phase !== "observer"
-    ) {
+    if (snapshot.phase !== "reveal" && snapshot.phase !== "observer") {
       return;
     }
 
@@ -697,11 +957,22 @@ export class CanvasRenderer {
     );
     const open =
       snapshot.phase === "ending"
-        ? 1
+        ? clamp(1 - snapshot.time / 1.2, 0.05, 1)
         : clamp((snapshot.time - 0.4) / 2.2, 0, 1);
+    const attackCharge =
+      snapshot.phase === "observer"
+        ? Math.max(
+            0,
+            ...snapshot.observerAttacks
+              .filter((attack) => !attack.hit && !attack.demo)
+              .map((attack) =>
+                clamp((attack.maxLife - attack.life) / attack.telegraph, 0, 1),
+              ),
+          )
+        : 0;
     const blink = snapshot.reducedMotion
       ? 1
-      : 0.92 + Math.sin(snapshot.time * 2.1) * 0.05;
+      : 0.92 + Math.sin(snapshot.time * 2.1) * 0.05 - attackCharge * 0.22;
     const lid = eyeHeight * open * blink;
     context.save();
     context.translate(center.x, center.y);

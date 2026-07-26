@@ -21,13 +21,19 @@ import { detectKnotCandidate, detectSelfKnot } from "../systems/knotDetection";
 import {
   CHAIN_SEGMENT_LENGTH,
   CUTTER_MIN_SECONDS,
+  FINAL_INTEGRITY,
+  FINAL_ONBOARDING_SECONDS,
   FIXED_TIMESTEP,
+  FOCUS_ATTRACTION,
+  FOCUS_RADIUS,
   INITIAL_LINKS,
   KNOT_CAPTURE_SECONDS,
   KNOT_COOLDOWN_SECONDS,
   KNOT_HITSTOP_SECONDS,
-  MIN_KNOT_AREA,
   MIN_KNOT_SPAN,
+  OBSERVER_ATTACK_MAX_SECONDS,
+  OBSERVER_ATTACK_MIN_SECONDS,
+  OBSERVER_ATTACK_TELEGRAPH_SECONDS,
   OBSERVER_DURATION,
   PROTECTED_CHAIN_LINKS,
   REVELATION_FORCE_SECONDS,
@@ -39,6 +45,8 @@ import type {
   CellType,
   ChainLink,
   Cutter,
+  FocusState,
+  HostCore,
   KnotCandidate,
   KnotState,
   LinkKind,
@@ -48,13 +56,22 @@ import type {
   Scar,
 } from "./types";
 
-type RuntimePhase = "menu" | "playing" | "reveal" | "observer" | "ending";
+type RuntimePhase =
+  | "menu"
+  | "playing"
+  | "paused"
+  | "reveal"
+  | "observer"
+  | "ending";
 
 type InputState = {
   keys: Set<string>;
   mouseScreen: Vec2;
   mouseWorld: Vec2;
+  pointerInside: boolean;
 };
+
+type EndingOutcome = "victory" | "failure" | null;
 
 const isDevelopment = process.env.NODE_ENV !== "production";
 
@@ -77,16 +94,24 @@ export class GameEngine {
   private fpsFrames = 0;
   private fpsTimer = 0;
   private attackTimer = 0;
+  private observerIntroElapsed = 0;
+  private finalIntegrity = FINAL_INTEGRITY;
+  private endingOutcome: EndingOutcome = null;
   private firstCutterQueued = false;
   private knotCooldown = 0;
   private lastKnotSpan = 0;
   private largestCapture = 0;
   private candidate: KnotCandidate | null = null;
   private chainWave = 0;
+  private focusInfluencedIds: number[] = [];
+  private focusPulse = 0;
+  private focusPromptPending = false;
+  private focusInstructionCleared = false;
   private input: InputState = {
     keys: new Set(),
     mouseScreen: { x: 0, y: 0 },
     mouseWorld: { x: 16, y: 16 },
+    pointerInside: false,
   };
   private player: Player = this.createPlayer();
   private chain: ChainLink[] = [];
@@ -96,6 +121,7 @@ export class GameEngine {
   private particles: Particle[] = [];
   private observerAttacks: ObserverAttack[] = [];
   private cutter: Cutter | null = null;
+  private hostCore: HostCore | null = null;
   private knot: KnotState = { mode: "idle" };
   private ghostRoute: Vec2[] = [
     { x: 16.5, y: 19.2 },
@@ -125,6 +151,7 @@ export class GameEngine {
     window.removeEventListener("mousemove", this.handlePointerMove);
     window.removeEventListener("mousedown", this.handlePointerDown);
     window.removeEventListener("mouseup", this.handlePointerUp);
+    window.removeEventListener("mouseleave", this.handlePointerLeave);
     window.removeEventListener("contextmenu", this.handleContextMenu);
     window.removeEventListener("keydown", this.handleKeyDown);
     window.removeEventListener("keyup", this.handleKeyUp);
@@ -150,6 +177,31 @@ export class GameEngine {
     this.phase = "menu";
     this.updateTitle("BODY//KNOT");
     useGameUiStore.getState().resetUi();
+  }
+
+  resume() {
+    if (this.phase !== "paused") {
+      return;
+    }
+
+    this.phase = "playing";
+    useGameUiStore.getState().setSettingsVisible(false);
+    useGameUiStore.getState().setPhase("playing");
+    this.updateTitle("BODY//KNOT");
+  }
+
+  private pause() {
+    if (this.phase !== "playing") {
+      return;
+    }
+
+    this.phase = "paused";
+    this.candidate = null;
+    this.focusInfluencedIds = [];
+    const store = useGameUiStore.getState();
+    store.setSettingsVisible(false);
+    store.setPhase("paused");
+    store.setPrompt("");
   }
 
   runFromRevelation() {
@@ -192,17 +244,25 @@ export class GameEngine {
     this.particles = [];
     this.observerAttacks = [];
     this.cutter = null;
+    this.hostCore = null;
     this.knot = { mode: "idle" };
     this.captures = 0;
     this.gameplayElapsed = 0;
     this.firstCutterQueued = false;
     this.revealStage = -1;
     this.attackTimer = 0;
+    this.observerIntroElapsed = 0;
+    this.finalIntegrity = FINAL_INTEGRITY;
+    this.endingOutcome = null;
     this.knotCooldown = 0;
     this.lastKnotSpan = 0;
     this.largestCapture = 0;
     this.candidate = null;
     this.chainWave = 0;
+    this.focusInfluencedIds = [];
+    this.focusPulse = 0;
+    this.focusPromptPending = false;
+    this.focusInstructionCleared = false;
     this.shake = 0;
     this.simulationStep = 0;
 
@@ -382,7 +442,7 @@ export class GameEngine {
     this.shake = Math.max(0, this.shake - delta * 2.8);
     this.chainWave = Math.max(0, this.chainWave - delta * 1.8);
     const frozen =
-      this.phase === "playing" &&
+      (this.phase === "playing" || this.phase === "observer") &&
       this.knot.mode === "capturing" &&
       this.knot.hitStop > 0;
 
@@ -403,7 +463,12 @@ export class GameEngine {
       this.updateCells(delta);
       this.updateChain(delta);
 
-      if (this.phase === "playing") {
+      if (
+        this.phase === "playing" ||
+        (this.phase === "observer" &&
+          this.observerIntroElapsed >= FINAL_ONBOARDING_SECONDS &&
+          this.hostCore?.state !== "binding")
+      ) {
         this.updateKnotCandidate(delta);
         this.detectKnotAfterChain();
       }
@@ -429,6 +494,8 @@ export class GameEngine {
       this.updatePlayer(delta, 24.5, 5.05);
     }
 
+    this.updateFocus(delta);
+
     this.updateCutter(delta);
 
     if (
@@ -441,7 +508,9 @@ export class GameEngine {
       store.setToast("CUTTER CELL ENTERED");
     }
 
-    if (this.captures === 0 && elapsed < 2.7) {
+    if (this.focusPromptPending && !this.focusInstructionCleared) {
+      store.setPrompt(strings.prompts.focus);
+    } else if (this.captures === 0 && elapsed < 2.7) {
       store.setPrompt(strings.prompts.circle);
     } else if (this.captures === 0) {
       store.setPrompt(strings.prompts.cross);
@@ -461,31 +530,109 @@ export class GameEngine {
     }
   }
 
+  private updateFocus(delta: number) {
+    this.focusPulse += delta * 4;
+    this.focusInfluencedIds = [];
+
+    if (!this.isFocusActive()) {
+      return;
+    }
+
+    let influenced = 0;
+
+    for (const cell of this.cells) {
+      const distance = dist(cell.pos, this.input.mouseWorld);
+
+      if (distance > FOCUS_RADIUS) {
+        continue;
+      }
+
+      const strength = clamp(1 - distance / FOCUS_RADIUS, 0, 1);
+      const towardFocus = normalize({
+        x: this.input.mouseWorld.x - cell.pos.x,
+        y: this.input.mouseWorld.y - cell.pos.y,
+      });
+      const weight =
+        cell.type === "platelet" ? 0.82 : cell.type === "fever" ? 0.62 : 0.72;
+      cell.vel.x +=
+        towardFocus.x * FOCUS_ATTRACTION * strength * weight * delta;
+      cell.vel.y +=
+        towardFocus.y * FOCUS_ATTRACTION * strength * weight * delta;
+      this.focusInfluencedIds.push(cell.id);
+      influenced += 1;
+    }
+
+    if (this.focusPromptPending && influenced >= 2) {
+      this.focusInstructionCleared = true;
+      this.focusPromptPending = false;
+    }
+  }
+
+  private isFocusActive() {
+    return (
+      this.phase === "playing" &&
+      this.input.pointerInside &&
+      !useGameUiStore.getState().settingsVisible
+    );
+  }
+
   private updateObserver(delta: number, now: number) {
     const elapsed = now - this.phaseStartedAt;
+    this.observerIntroElapsed += delta;
+    if (this.hostCore) {
+      this.hostCore.pulse += delta * 3;
+    }
     useGameUiStore.getState().setClock(
       `00:${Math.max(0, Math.ceil(OBSERVER_DURATION - elapsed))
         .toString()
         .padStart(2, "0")}`,
     );
-    this.updatePlayer(delta, 8.8, 8.7);
+
+    const core = this.hostCore;
+    if (core?.state === "binding") {
+      this.updateCoreBinding(delta);
+      return;
+    }
+
+    if (this.knot.mode === "capturing") {
+      this.updateKnotCapture(delta);
+    } else if (this.observerIntroElapsed >= FINAL_ONBOARDING_SECONDS) {
+      this.updatePlayer(delta, 24.5, 5.05);
+    }
+
+    this.updateFinalPrompt();
     this.attackTimer -= delta;
 
-    if (this.attackTimer <= 0) {
-      this.attackTimer = 1.24;
+    if (
+      this.attackTimer <= 0 &&
+      this.observerIntroElapsed >= FINAL_ONBOARDING_SECONDS
+    ) {
+      this.attackTimer =
+        OBSERVER_ATTACK_MIN_SECONDS +
+        Math.random() *
+          (OBSERVER_ATTACK_MAX_SECONDS - OBSERVER_ATTACK_MIN_SECONDS);
       this.observerAttacks.push({
         pos: { ...this.input.mouseScreen },
-        life: 0.95,
-        maxLife: 0.95,
+        life: OBSERVER_ATTACK_TELEGRAPH_SECONDS + 0.28,
+        maxLife: OBSERVER_ATTACK_TELEGRAPH_SECONDS + 0.28,
+        telegraph: OBSERVER_ATTACK_TELEGRAPH_SECONDS,
+        radius: 28,
         hit: false,
+        demo: false,
       });
       this.audio.tone("observer");
     }
 
+    this.updateObserverDemoAttack();
+
     for (const attack of this.observerAttacks) {
       attack.life -= delta;
 
-      if (!attack.hit && attack.life < 0.18) {
+      if (
+        !attack.demo &&
+        !attack.hit &&
+        attack.life <= attack.maxLife - attack.telegraph
+      ) {
         attack.hit = true;
         this.resolveObserverAttack(attack);
       }
@@ -496,18 +643,98 @@ export class GameEngine {
     );
 
     if (elapsed >= OBSERVER_DURATION) {
-      this.endSlice();
+      this.endFailure();
+    } else if (!this.canCreateFinalKnot()) {
+      this.endFailure();
     }
+  }
+
+  private updateFinalPrompt() {
+    if (this.observerIntroElapsed < 0.82) {
+      useGameUiStore.getState().setPrompt(strings.prompts.finalA);
+    } else if (this.observerIntroElapsed < 1.64) {
+      useGameUiStore.getState().setPrompt(strings.prompts.finalB);
+    } else {
+      useGameUiStore.getState().setPrompt(strings.prompts.finalC);
+    }
+  }
+
+  private updateObserverDemoAttack() {
+    if (
+      this.observerIntroElapsed < 0.86 ||
+      this.observerIntroElapsed > 2.2 ||
+      this.observerAttacks.some((attack) => attack.demo)
+    ) {
+      return;
+    }
+
+    this.observerAttacks.push({
+      pos: { ...this.input.mouseScreen },
+      life: 1.08,
+      maxLife: 1.08,
+      telegraph: 0.9,
+      radius: 26,
+      hit: false,
+      demo: true,
+    });
+  }
+
+  private updateCoreBinding(delta: number) {
+    if (!this.hostCore || this.hostCore.state !== "binding") {
+      return;
+    }
+
+    this.hostCore.bindProgress = clamp(
+      this.hostCore.bindProgress + delta / 1.35,
+      0,
+      1,
+    );
+    this.chainWave = 1;
+    this.shake = Math.max(this.shake, 0.16);
+
+    if (this.hostCore.bindProgress >= 1) {
+      this.hostCore.state = "bound";
+      this.endVictory();
+    }
+  }
+
+  private canCreateFinalKnot() {
+    return this.chain.length >= PROTECTED_CHAIN_LINKS + MIN_KNOT_SPAN + 3;
+  }
+
+  private coreInsidePolygon(polygon: Vec2[]) {
+    if (this.phase !== "observer" || this.hostCore?.state !== "dormant") {
+      return false;
+    }
+
+    if (pointInPolygon(this.hostCore.pos, polygon)) {
+      return true;
+    }
+
+    let containedSamples = 0;
+
+    for (let index = 0; index < 8; index += 1) {
+      const angle = (index / 8) * Math.PI * 2;
+      const sample = {
+        x: this.hostCore.pos.x + Math.cos(angle) * this.hostCore.radius * 0.62,
+        y: this.hostCore.pos.y + Math.sin(angle) * this.hostCore.radius * 0.62,
+      };
+
+      if (pointInPolygon(sample, polygon)) {
+        containedSamples += 1;
+      }
+    }
+
+    return containedSamples >= 5;
   }
 
   private updateReveal(now: number) {
     const elapsed = now - this.phaseStartedAt;
     const stages = [
       { at: 1.0, caption: strings.revealLines[0], voice: "i_see_you" },
-      { at: 3.4, caption: strings.revealLines[1], voice: "it_stops" },
-      { at: 6.0, caption: strings.revealLines[2], voice: "it_moves" },
-      { at: 8.8, caption: strings.revealLines[3], voice: "not_the_parasite" },
-      { at: 11.7, caption: strings.revealLines[4], voice: "you_are" },
+      { at: 4.2, caption: strings.revealLines[1], voice: "it_moves" },
+      { at: 7.4, caption: strings.revealLines[2], voice: "not_the_parasite" },
+      { at: 10.5, caption: strings.revealLines[3], voice: "you_are" },
     ] as const;
 
     for (let index = 0; index < stages.length; index += 1) {
@@ -586,10 +813,22 @@ export class GameEngine {
     }
 
     const selfKnot = detectSelfKnot(this.chain, {
-      protectedLinks: this.captures === 0 ? 2 : PROTECTED_CHAIN_LINKS,
-      minSpan: this.captures === 0 ? 2 : MIN_KNOT_SPAN,
-      minArea: this.captures === 0 ? 0.28 : MIN_KNOT_AREA,
-      forgiveness: this.captures === 0 ? 1.08 : 0.56,
+      protectedLinks:
+        this.phase === "observer"
+          ? PROTECTED_CHAIN_LINKS
+          : this.captures === 0
+            ? 2
+            : PROTECTED_CHAIN_LINKS,
+      minSpan:
+        this.phase === "observer"
+          ? MIN_KNOT_SPAN
+          : this.captures === 0
+            ? 2
+            : MIN_KNOT_SPAN,
+      minArea:
+        this.phase === "observer" ? 0.86 : this.captures === 0 ? 0.28 : 0.55,
+      forgiveness:
+        this.phase === "observer" ? 1.05 : this.captures === 0 ? 1.08 : 0.82,
     });
 
     if (!selfKnot) {
@@ -601,18 +840,26 @@ export class GameEngine {
       .map((cell) => cell.id);
     const includesCutter =
       this.cutter != null && pointInPolygon(this.cutter.pos, selfKnot.polygon);
+    const includesCore = this.coreInsidePolygon(selfKnot.polygon);
+
+    if (this.phase === "observer" && !includesCore) {
+      return;
+    }
+
     this.lastKnotSpan = selfKnot.span;
     this.knot = {
       mode: "capturing",
       polygon: selfKnot.polygon,
       area: selfKnot.area,
       center: selfKnot.center,
-      progress: capturedIds.length > 0 || includesCutter ? 0 : 0.72,
+      progress:
+        capturedIds.length > 0 || includesCutter || includesCore ? 0 : 0.72,
       hitStop: this.captureHitStop(
-        capturedIds.length + (includesCutter ? 1 : 0),
+        capturedIds.length + (includesCutter ? 1 : 0) + (includesCore ? 1 : 0),
       ),
       capturedIds,
       includesCutter,
+      includesCore,
     };
     this.candidate = null;
     this.knotCooldown = KNOT_COOLDOWN_SECONDS;
@@ -620,10 +867,12 @@ export class GameEngine {
     this.player.vel.y *= 0.38;
     this.shake = Math.max(
       this.shake,
-      capturedIds.length > 1 || includesCutter ? 0.28 : 0.1,
+      capturedIds.length > 1 || includesCutter || includesCore ? 0.28 : 0.1,
     );
     this.audio.tone(
-      capturedIds.length > 0 || includesCutter ? "close" : "dash",
+      capturedIds.length > 0 || includesCutter || includesCore
+        ? "close"
+        : "dash",
     );
   }
 
@@ -634,10 +883,22 @@ export class GameEngine {
     }
 
     const candidate = detectKnotCandidate(this.chain, {
-      protectedLinks: this.captures === 0 ? 2 : PROTECTED_CHAIN_LINKS,
-      minSpan: this.captures === 0 ? 2 : MIN_KNOT_SPAN,
-      minArea: this.captures === 0 ? 0.24 : MIN_KNOT_AREA,
-      forgiveness: this.captures === 0 ? 1.32 : 0.78,
+      protectedLinks:
+        this.phase === "observer"
+          ? PROTECTED_CHAIN_LINKS
+          : this.captures === 0
+            ? 2
+            : PROTECTED_CHAIN_LINKS,
+      minSpan:
+        this.phase === "observer"
+          ? MIN_KNOT_SPAN
+          : this.captures === 0
+            ? 2
+            : MIN_KNOT_SPAN,
+      minArea:
+        this.phase === "observer" ? 0.78 : this.captures === 0 ? 0.24 : 0.48,
+      forgiveness:
+        this.phase === "observer" ? 1.18 : this.captures === 0 ? 1.32 : 1.02,
     });
 
     if (!candidate) {
@@ -648,6 +909,7 @@ export class GameEngine {
     const cellIds = this.cells
       .filter((cell) => pointInPolygon(cell.pos, candidate.polygon))
       .map((cell) => cell.id);
+    const includesCore = this.coreInsidePolygon(candidate.polygon);
     this.candidate = {
       targetIndex: candidate.crossedIndex,
       point: candidate.intersection,
@@ -655,6 +917,8 @@ export class GameEngine {
       center: candidate.center,
       area: candidate.area,
       cellIds,
+      previewCount: cellIds.length + (includesCore ? 1 : 0),
+      includesCore,
       pulse: (this.candidate?.pulse ?? 0) + delta * 5,
     };
 
@@ -723,7 +987,11 @@ export class GameEngine {
         ? this.knot.capturedIds.includes(cell.id)
         : false,
     );
-    const totalTargets = captured.length + (this.knot.includesCutter ? 1 : 0);
+    const includesCore = this.knot.includesCore;
+    const totalTargets =
+      captured.length +
+      (this.knot.includesCutter ? 1 : 0) +
+      (includesCore ? 1 : 0);
 
     for (const cell of captured) {
       this.addCapturedLink(cell.type);
@@ -741,6 +1009,11 @@ export class GameEngine {
     }
 
     this.cells = this.cells.filter((cell) => !captured.includes(cell));
+
+    if (includesCore) {
+      this.beginCoreBinding();
+      return;
+    }
 
     while (this.cells.length < 28) {
       this.spawnCellCluster(this.nextClusterCenter(), 3, false);
@@ -774,7 +1047,25 @@ export class GameEngine {
       for (const cell of this.cells) {
         cell.highlighted = false;
       }
+      this.focusPromptPending = true;
     }
+  }
+
+  private beginCoreBinding() {
+    if (!this.hostCore) {
+      return;
+    }
+
+    this.hostCore.state = "binding";
+    this.hostCore.bindProgress = 0;
+    this.observerAttacks = [];
+    this.knot = { mode: "idle" };
+    this.candidate = null;
+    this.audio.tone("capture");
+    this.audio.tone("reveal");
+    this.chainWave = 1;
+    this.shake = Math.max(this.shake, 0.42);
+    useGameUiStore.getState().setPrompt("HOST BOUND.");
   }
 
   private captureMessage(totalTargets: number) {
@@ -1038,15 +1329,84 @@ export class GameEngine {
 
   private resolveObserverAttack(attack: ObserverAttack) {
     const worldPoint = this.renderer.screenToWorld(attack.pos);
-    const hitPlayer = dist(worldPoint, this.player.pos) < 1.45;
-    const hitChain = this.chain.some(
-      (link) => dist(worldPoint, link.pos) < 0.85,
-    );
+    const hitPlayer = dist(worldPoint, this.player.pos) < 1.25;
+    const chainHit = this.closestChainHit(worldPoint);
 
-    if (hitPlayer || hitChain) {
+    if (hitPlayer) {
+      this.finalIntegrity -= 1;
       this.spawnBurst(worldPoint, "#e63848", 18);
       this.audio.tone("sever");
       this.shake = Math.max(this.shake, 0.38);
+
+      if (this.finalIntegrity <= 0) {
+        this.endFailure();
+      }
+
+      return;
+    }
+
+    if (chainHit != null) {
+      this.observerCutChain(chainHit);
+      return;
+    }
+
+    this.spawnBurst(worldPoint, "#7c1a23", 10);
+    this.scars.push({
+      pos: worldPoint,
+      radius: 0.65,
+      life: 2.2,
+      maxLife: 2.2,
+    });
+    this.audio.tone("observer");
+  }
+
+  private closestChainHit(point: Vec2) {
+    let bestIndex: number | null = null;
+    let bestDistance = 0.82;
+
+    for (const [index, link] of this.chain.entries()) {
+      const distance = dist(point, link.pos);
+
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        bestIndex = index;
+      }
+    }
+
+    return bestIndex;
+  }
+
+  private observerCutChain(index: number) {
+    const { removed, cutPoint } = applySafeCut(this.chain, index, 2);
+
+    if (removed.length === 0 || !cutPoint) {
+      this.spawnBurst(this.player.pos, "#e63848", 8);
+      return;
+    }
+
+    for (const link of removed) {
+      link.dead = true;
+      link.prev = {
+        x: link.pos.x + (Math.random() - 0.5) * 0.24,
+        y: link.pos.y + (Math.random() - 0.5) * 0.24,
+      };
+    }
+
+    this.severed.push(...removed);
+    this.scars.push({
+      pos: { ...cutPoint },
+      radius: 0.78,
+      life: 4.2,
+      maxLife: 4.2,
+    });
+    this.knot = { mode: "idle" };
+    this.candidate = null;
+    this.audio.tone("sever");
+    this.shake = Math.max(this.shake, 0.34);
+    useGameUiStore.getState().setToast(`CHAIN SEVERED -${removed.length}`);
+
+    if (!this.canCreateFinalKnot()) {
+      this.endFailure();
     }
   }
 
@@ -1110,24 +1470,83 @@ export class GameEngine {
     this.phase = "observer";
     this.phaseStartedAt = performance.now() / 1000;
     this.observerAttacks = [];
-    this.attackTimer = 0.6;
+    this.attackTimer = FINAL_ONBOARDING_SECONDS + 0.7;
+    this.observerIntroElapsed = 0;
+    this.finalIntegrity = FINAL_INTEGRITY;
+    const coreDirection = normalize({
+      x: WORLD_SIZE * 0.5 - this.player.pos.x,
+      y: WORLD_SIZE * 0.5 - this.player.pos.y,
+    });
+    const corePos = {
+      x: clamp(this.player.pos.x + coreDirection.x * 2.55, 10.5, 21.5),
+      y: clamp(this.player.pos.y + coreDirection.y * 2.55, 10.5, 21.5),
+    };
+    this.hostCore = {
+      pos: corePos,
+      radius: 1.34,
+      pulse: 0,
+      state: "dormant",
+      bindProgress: 0,
+    };
+    this.clearFinalClutter();
     this.audio.restoreAfterReveal();
     this.audio.setObserverMode(true);
     this.updateTitle("YOU ARE THE PARASITE");
     const store = useGameUiStore.getState();
     store.setPhase("observer");
+    store.setSettingsVisible(false);
     store.setCaption("");
-    store.setPrompt("");
+    store.setPrompt(strings.prompts.finalA);
   }
 
-  private endSlice() {
+  private clearFinalClutter() {
+    if (!this.hostCore) {
+      return;
+    }
+
+    const corePos = this.hostCore.pos;
+    this.cells = this.cells.filter((cell) => dist(cell.pos, corePos) > 3.2);
+
+    while (this.cells.length < 18) {
+      this.spawnCellCluster(this.nextClusterCenter(), 3, false);
+    }
+  }
+
+  private endVictory() {
     this.phase = "ending";
+    this.endingOutcome = "victory";
     this.audio.setObserverMode(false);
-    this.updateTitle("THE HOST REMEMBERS YOUR HAND");
+    this.audio.silenceHeartbeat(1.25);
+    this.audio.fadeForReveal();
+    this.audio.playVoice("back_again");
+    this.updateTitle("YOU WERE NEVER OUTSIDE");
     const store = useGameUiStore.getState();
     store.setPhase("ending");
-    store.setCaption(`${strings.endingA}\n${strings.endingB}`);
-    this.audio.playVoice("back_again");
+    store.setPrompt("");
+    store.setSettingsVisible(false);
+    store.setCaption(strings.victoryA);
+    window.setTimeout(() => {
+      if (this.phase === "ending" && this.endingOutcome === "victory") {
+        useGameUiStore.getState().setCaption(strings.victoryB);
+      }
+    }, 1900);
+  }
+
+  private endFailure() {
+    if (this.phase === "ending") {
+      return;
+    }
+
+    this.phase = "ending";
+    this.endingOutcome = "failure";
+    this.audio.setObserverMode(false);
+    this.audio.tone("sever");
+    this.updateTitle("SIGNAL SEVERED");
+    const store = useGameUiStore.getState();
+    store.setPhase("ending");
+    store.setPrompt("");
+    store.setSettingsVisible(false);
+    store.setCaption(`${strings.failureA}\n${strings.failureB}`);
   }
 
   private updateDebug() {
@@ -1153,6 +1572,30 @@ export class GameEngine {
     });
   }
 
+  private currentFocusState(): FocusState {
+    const pullingToCore =
+      this.phase === "ending" &&
+      this.endingOutcome === "victory" &&
+      this.hostCore != null;
+    const world =
+      pullingToCore && this.hostCore
+        ? this.hostCore.pos
+        : this.input.mouseWorld;
+    const screen = pullingToCore
+      ? this.renderer.worldToScreen(world)
+      : this.input.mouseScreen;
+
+    return {
+      active:
+        this.isFocusActive() || this.phase === "observer" || pullingToCore,
+      screen,
+      world,
+      radius: FOCUS_RADIUS,
+      influencedIds: this.focusInfluencedIds,
+      pulse: this.focusPulse,
+    };
+  }
+
   private render(now: number) {
     const settings = useGameUiStore.getState().settings;
     this.renderer.render({
@@ -1165,8 +1608,10 @@ export class GameEngine {
       scars: this.scars,
       particles: this.particles,
       cutter: this.cutter,
+      hostCore: this.hostCore,
       knot: this.knot,
       candidate: this.candidate,
+      focus: this.currentFocusState(),
       chainWave: this.chainWave,
       observerAttacks: this.observerAttacks,
       mouseScreen: this.input.mouseScreen,
@@ -1209,6 +1654,7 @@ export class GameEngine {
         .map((cell) => cell.id),
       includesCutter:
         this.cutter != null && pointInPolygon(this.cutter.pos, polygon),
+      includesCore: false,
     };
     this.finishKnotCapture();
   }
@@ -1218,6 +1664,7 @@ export class GameEngine {
     window.addEventListener("mousemove", this.handlePointerMove);
     window.addEventListener("mousedown", this.handlePointerDown);
     window.addEventListener("mouseup", this.handlePointerUp);
+    window.addEventListener("mouseleave", this.handlePointerLeave);
     window.addEventListener("contextmenu", this.handleContextMenu);
     window.addEventListener("keydown", this.handleKeyDown);
     window.addEventListener("keyup", this.handleKeyUp);
@@ -1226,11 +1673,22 @@ export class GameEngine {
   private handleResize = () => {
     this.renderer.resize();
     this.input.mouseWorld = this.renderer.screenToWorld(this.input.mouseScreen);
+    this.input.pointerInside = this.renderer.isScreenInsideWorld(
+      this.input.mouseScreen,
+    );
   };
 
   private handlePointerMove = (event: MouseEvent) => {
     this.input.mouseScreen = { x: event.clientX, y: event.clientY };
     this.input.mouseWorld = this.renderer.screenToWorld(this.input.mouseScreen);
+    this.input.pointerInside = this.renderer.isScreenInsideWorld(
+      this.input.mouseScreen,
+    );
+  };
+
+  private handlePointerLeave = () => {
+    this.input.pointerInside = false;
+    this.focusInfluencedIds = [];
   };
 
   private handlePointerDown = (event: MouseEvent) => {
@@ -1247,10 +1705,32 @@ export class GameEngine {
 
   private handleKeyDown = (event: KeyboardEvent) => {
     const key = event.key.toLowerCase();
+
+    if (key === "escape") {
+      const store = useGameUiStore.getState();
+
+      if (store.settingsVisible) {
+        store.setSettingsVisible(false);
+        return;
+      }
+
+      if (this.phase === "playing") {
+        this.pause();
+      } else if (this.phase === "paused") {
+        this.resume();
+      }
+
+      return;
+    }
+
     this.input.keys.add(key);
     this.applyMovementTapImpulse(key);
 
-    if (key === " " && this.player.dashCooldown <= 0 && this.phase !== "menu") {
+    if (
+      key === " " &&
+      this.player.dashCooldown <= 0 &&
+      (this.phase === "playing" || this.phase === "observer")
+    ) {
       this.player.dashImpulse = 5.1;
       this.player.dashCooldown = 0.66;
       this.audio.tone("dash");
@@ -1278,7 +1758,11 @@ export class GameEngine {
   };
 
   private applyMovementTapImpulse(key: string) {
-    if (this.phase !== "playing" && this.phase !== "observer") {
+    if (
+      this.phase !== "playing" &&
+      (this.phase !== "observer" ||
+        this.observerIntroElapsed < FINAL_ONBOARDING_SECONDS)
+    ) {
       return;
     }
 

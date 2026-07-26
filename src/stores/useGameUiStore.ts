@@ -2,7 +2,13 @@
 
 import { create } from "zustand";
 
-export type GamePhase = "menu" | "playing" | "reveal" | "observer" | "ending";
+export type GamePhase =
+  | "menu"
+  | "playing"
+  | "paused"
+  | "reveal"
+  | "observer"
+  | "ending";
 
 export type GameSettings = {
   audio: boolean;

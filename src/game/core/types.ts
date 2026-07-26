@@ -15,6 +15,15 @@ export type Cell = {
   captured: boolean;
 };
 
+export type FocusState = {
+  active: boolean;
+  screen: Vec2;
+  world: Vec2;
+  radius: number;
+  influencedIds: number[];
+  pulse: number;
+};
+
 export type ChainLink = {
   pos: Vec2;
   prev: Vec2;
@@ -56,7 +65,18 @@ export type ObserverAttack = {
   pos: Vec2;
   life: number;
   maxLife: number;
+  telegraph: number;
+  radius: number;
   hit: boolean;
+  demo: boolean;
+};
+
+export type HostCore = {
+  pos: Vec2;
+  radius: number;
+  pulse: number;
+  state: "dormant" | "binding" | "bound";
+  bindProgress: number;
 };
 
 export type KnotState =
@@ -72,6 +92,7 @@ export type KnotState =
       hitStop: number;
       capturedIds: number[];
       includesCutter: boolean;
+      includesCore: boolean;
     };
 
 export type KnotCandidate = {
@@ -81,6 +102,8 @@ export type KnotCandidate = {
   center: Vec2;
   area: number;
   cellIds: number[];
+  previewCount: number;
+  includesCore: boolean;
   pulse: number;
 };
 

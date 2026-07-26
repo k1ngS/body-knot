@@ -123,7 +123,7 @@ export function BodyKnotShell() {
             <div className="text-[0.62rem] font-black uppercase tracking-[0.28em] text-[#646b73]">
               A 32x32 biological interface
             </div>
-            <h1 className="my-3 text-[clamp(3rem,9vw,6.5rem)] font-black leading-[0.82] tracking-[0.07em]">
+            <h1 className="my-3 text-[clamp(2.25rem,9vw,6.5rem)] font-black leading-[0.82] tracking-[0.04em] sm:tracking-[0.07em]">
               BODY<span className="text-[#78727f]">{"//"}</span>KNOT
             </h1>
             <p className="mx-auto mb-7 max-w-[430px] text-sm leading-7 text-[#858b92]">
@@ -206,6 +206,30 @@ export function BodyKnotShell() {
         </section>
       )}
 
+      {phase === "paused" && (
+        <section className="absolute inset-0 grid place-items-center bg-[#02030488] backdrop-blur-[1px]">
+          <div className="relative z-10 w-[min(360px,88vw)] border border-[#22262b] bg-[#060708dd] p-6 text-center shadow-[0_30px_100px_#000c]">
+            <div className="mb-5 text-[0.72rem] font-black uppercase tracking-[0.26em] text-[#c8d6d3]">
+              {strings.paused}
+            </div>
+            <button
+              className="w-full border-t border-[#292d32] bg-transparent p-4 text-xs font-black uppercase tracking-[0.2em] text-[#b7bbc0] hover:bg-[#0c0e10] hover:text-white"
+              type="button"
+              onClick={() => engineRef.current?.resume()}
+            >
+              {strings.resume}
+            </button>
+            <button
+              className="w-full border-y border-[#292d32] bg-transparent p-4 text-xs font-black uppercase tracking-[0.2em] text-[#b7bbc0] hover:bg-[#0c0e10] hover:text-white"
+              type="button"
+              onClick={() => engineRef.current?.restart()}
+            >
+              {strings.restart}
+            </button>
+          </div>
+        </section>
+      )}
+
       {phase === "ending" && (
         <section className="absolute inset-0 grid place-items-center bg-[#010203ed] backdrop-blur">
           <div className="w-[min(620px,90vw)] text-center">
@@ -213,9 +237,7 @@ export function BodyKnotShell() {
               POINTER MEMORY STORED
             </div>
             <h2 className="my-4 whitespace-pre-line text-[clamp(1.7rem,5vw,3.4rem)] font-black uppercase tracking-[0.14em]">
-              {settings.captions
-                ? caption
-                : `${strings.endingA}\n${strings.endingB}`}
+              {caption || `${strings.failureA}\n${strings.failureB}`}
             </h2>
             <button
               className="mt-4 border border-[#34383e] bg-[#080a0c] px-6 py-4 text-xs font-black uppercase tracking-[0.18em] text-[#d7d7d1] hover:border-[#73777e]"
@@ -246,14 +268,16 @@ export function BodyKnotShell() {
         </div>
       )}
 
-      <button
-        ref={settingsButtonRef}
-        className="absolute right-4 top-16 z-20 border border-[#2a3035] bg-[#050708aa] px-3 py-2 text-[0.6rem] font-black uppercase tracking-[0.16em] text-[#929aa0] backdrop-blur hover:text-white"
-        type="button"
-        onClick={toggleSettings}
-      >
-        {strings.settings}
-      </button>
+      {phase !== "playing" && phase !== "observer" && (
+        <button
+          ref={settingsButtonRef}
+          className="absolute right-4 top-16 z-20 border border-[#2a3035] bg-[#050708aa] px-3 py-2 text-[0.6rem] font-black uppercase tracking-[0.16em] text-[#929aa0] backdrop-blur hover:text-white"
+          type="button"
+          onClick={toggleSettings}
+        >
+          {strings.settings}
+        </button>
+      )}
 
       {settingsVisible && (
         <SettingsPanel

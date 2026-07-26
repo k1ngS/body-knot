@@ -12,6 +12,7 @@ export class AudioDirector {
   private effects: GainNode | null = null;
   private drone: OscillatorBundle[] = [];
   private heartbeatTimer = 0;
+  private heartbeatSilenceTimer = 0;
   private observerMode = false;
   private ambienceTarget = 0.16;
 
@@ -49,6 +50,10 @@ export class AudioDirector {
     this.observerMode = enabled;
   }
 
+  silenceHeartbeat(seconds: number) {
+    this.heartbeatSilenceTimer = Math.max(this.heartbeatSilenceTimer, seconds);
+  }
+
   tick(delta: number) {
     if (!this.context) {
       return;
@@ -67,6 +72,15 @@ export class AudioDirector {
     );
 
     if (!settings.audio) {
+      return;
+    }
+
+    this.heartbeatSilenceTimer = Math.max(
+      0,
+      this.heartbeatSilenceTimer - delta,
+    );
+
+    if (this.heartbeatSilenceTimer > 0) {
       return;
     }
 
