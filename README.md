@@ -4,7 +4,7 @@
 
 ## Play
 
-**Live build:** _add the Vercel URL here_  
+**Live build:** body-knot.vercel.app 
 **Game Jam page:** _add the vibecode.game URL here_  
 **itch.io:** _optional — add later_
 
