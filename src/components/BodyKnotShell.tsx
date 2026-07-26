@@ -160,11 +160,14 @@ export function BodyKnotShell() {
                 ? strings.hud.contaminated
                 : strings.hud.stable}
             </span>
-            <span>{clock}</span>
+            {phase === "playing" && <span>{clock}</span>}
           </div>
           {phase === "observer" && (
-            <div className="absolute left-1/2 top-[9%] -translate-x-1/2 text-center text-[0.65rem] font-black uppercase tracking-[0.24em] text-[#b73540] drop-shadow-[0_0_16px_#8f1d29]">
-              {strings.observerWarning}
+            <div className="absolute left-1/2 top-4 -translate-x-1/2 text-center font-black uppercase tracking-[0.22em] drop-shadow-[0_0_18px_#8f1d29]">
+              <div className="text-[0.82rem] text-[#f0ffff]">
+                {strings.observerWarning}
+              </div>
+              <div className="mt-1 text-[1rem] text-[#ff5b68]">{clock}</div>
             </div>
           )}
           {prompt && (
@@ -188,16 +191,23 @@ export function BodyKnotShell() {
             <div className="mb-4 min-h-14 whitespace-pre-line text-sm font-bold uppercase leading-8 tracking-[0.16em] text-[#d0d0ca]">
               {settings.captions ? caption : ""}
             </div>
+            {!revealMenu.enabled && (
+              <div className="mb-2 h-px overflow-hidden bg-[#1c2024]">
+                <div className="h-full w-1/2 animate-pulse bg-[#9ea9a6]" />
+              </div>
+            )}
             <button
-              className="w-full border-t border-[#292d32] bg-transparent p-4 text-xs font-black uppercase tracking-[0.2em] text-[#b7bbc0] hover:bg-[#0c0e10] hover:text-white"
+              className="w-full border-t border-[#292d32] bg-transparent p-4 text-xs font-black uppercase tracking-[0.2em] text-[#b7bbc0] hover:bg-[#0c0e10] hover:text-white disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-[#b7bbc0]"
               type="button"
+              disabled={!revealMenu.enabled}
               onClick={() => engineRef.current?.runFromRevelation()}
             >
               {revealMenu.resume}
             </button>
             <button
-              className="w-full border-y border-[#292d32] bg-transparent p-4 text-xs font-black uppercase tracking-[0.2em] text-[#b7bbc0] hover:bg-[#0c0e10] hover:text-white"
+              className="w-full border-y border-[#292d32] bg-transparent p-4 text-xs font-black uppercase tracking-[0.2em] text-[#b7bbc0] hover:bg-[#0c0e10] hover:text-white disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-[#b7bbc0]"
               type="button"
+              disabled={!revealMenu.enabled}
               onClick={() => engineRef.current?.quitResponse()}
             >
               {revealMenu.quit}

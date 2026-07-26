@@ -12,10 +12,11 @@ export const strings = {
     free: "CROSS THE CHAIN. TAKE MORE.",
     larger: "MAKE A LARGER KNOT.",
     cursor: "YOUR HAND IS WARM.",
-    focus: "MOVE YOUR FOCUS TO GATHER CELLS.",
+    focus: "MOVE YOUR FOCUS.\nGATHER THEM.",
     finalA: "THE EYE FOLLOWS YOUR HAND.",
-    finalB: "KEEP IT AWAY FROM YOUR BODY.",
+    finalB: "MOVE. LET IT LOCK.",
     finalC: "BIND THE CORE.",
+    finalMove: "MOVE. CIRCLE. CROSS.",
   },
   revealLines: [
     "I SEE THE HAND THAT GATHERS THEM.",

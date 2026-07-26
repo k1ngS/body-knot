@@ -35,6 +35,7 @@ type RevealMenu = {
   title: string;
   resume: string;
   quit: string;
+  enabled: boolean;
 };
 
 type Toast = {
@@ -101,6 +102,7 @@ export const useGameUiStore = create<GameUiState>((set) => ({
     title: "PAUSED",
     resume: "RESUME",
     quit: "QUIT",
+    enabled: false,
   },
   debug: defaultDebug,
   settings: defaultSettings,
@@ -145,6 +147,7 @@ export const useGameUiStore = create<GameUiState>((set) => ({
         title: "PAUSED",
         resume: "RESUME",
         quit: "QUIT",
+        enabled: false,
       },
       debug: defaultDebug,
     }),
