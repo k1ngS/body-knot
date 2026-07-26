@@ -6,33 +6,82 @@ type OscillatorBundle = {
   gain: GainNode;
 };
 
+type ActiveAudio = {
+  audio: HTMLAudioElement;
+  volume: number;
+};
+
+type LoopKey = "ambience" | "heartbeat" | "revelationBed";
+type SfxKey =
+  | "eyeOpen"
+  | "hostBind"
+  | "observerLock"
+  | "signalSever"
+  | "youArePressure";
+
+const loopAssets = {
+  ambience: "/audio/ambience/ambience_organic_loop_16s.wav",
+  heartbeat: "/audio/ambience/heartbeat_loop_12s.wav",
+  revelationBed: "/audio/ambience/revelation_voice_bed_13s.wav",
+} satisfies Record<LoopKey, string>;
+
+const sfxAssets = {
+  eyeOpen: "/audio/sfx/sfx_eye_open.wav",
+  hostBind: "/audio/sfx/sfx_host_bind.wav",
+  observerLock: "/audio/sfx/sfx_observer_lock.wav",
+  signalSever: "/audio/sfx/sfx_signal_sever.wav",
+  youArePressure: "/audio/sfx/sfx_you_are_pressure.wav",
+} satisfies Record<SfxKey, string>;
+
+const baseLoopVolumes = {
+  ambience: 0.21,
+  heartbeat: 0.1,
+  revelationBed: 0.25,
+} satisfies Record<LoopKey, number>;
+
 export class AudioDirector {
   private context: AudioContext | null = null;
   private master: GainNode | null = null;
+  private music: GainNode | null = null;
   private effects: GainNode | null = null;
   private drone: OscillatorBundle[] = [];
-  private heartbeatTimer = 0;
-  private heartbeatSilenceTimer = 0;
+  private loops: Partial<Record<LoopKey, HTMLAudioElement>> = {};
+  private activeVoices: ActiveAudio[] = [];
+  private activeSfx: ActiveAudio[] = [];
+  private active = false;
+  private lastAudioEnabled = true;
   private observerMode = false;
-  private ambienceTarget = 0.16;
+  private heartbeatSilenceTimer = 0;
+  private ambienceDuck = 1;
+  private heartbeatIntensity = 0;
 
   init() {
     if (this.context || !this.settings().audio) {
+      if (this.context) {
+        this.startGameplayLoops();
+      }
       return;
     }
 
     const AudioContextClass = window.AudioContext || window.webkitAudioContext;
     this.context = new AudioContextClass();
     this.master = this.context.createGain();
+    this.music = this.context.createGain();
     this.effects = this.context.createGain();
-    this.master.gain.value = 0.16;
+    this.master.gain.value = 1;
+    this.music.gain.value = this.settings().musicVolume;
     this.effects.gain.value = this.settings().effectsVolume;
+    this.music.connect(this.master);
     this.effects.connect(this.master);
     this.master.connect(this.context.destination);
     this.startDrone();
+    this.prepareLoops();
+    this.startGameplayLoops();
   }
 
   destroy() {
+    this.stopAll();
+
     for (const bundle of this.drone) {
       bundle.oscillator.stop();
       bundle.oscillator.disconnect();
@@ -43,7 +92,27 @@ export class AudioDirector {
     this.context?.close();
     this.context = null;
     this.master = null;
+    this.music = null;
     this.effects = null;
+  }
+
+  stopAll() {
+    this.active = false;
+
+    for (const audio of Object.values(this.loops)) {
+      this.stopAudio(audio);
+    }
+
+    for (const active of [...this.activeVoices, ...this.activeSfx]) {
+      this.stopAudio(active.audio);
+    }
+
+    this.activeVoices = [];
+    this.activeSfx = [];
+    this.ambienceDuck = 1;
+    this.heartbeatIntensity = 0;
+    this.observerMode = false;
+    this.heartbeatSilenceTimer = 0;
   }
 
   setObserverMode(enabled: boolean) {
@@ -54,24 +123,8 @@ export class AudioDirector {
     this.heartbeatSilenceTimer = Math.max(this.heartbeatSilenceTimer, seconds);
   }
 
-  tick(delta: number) {
+  tick(delta: number, danger = 0) {
     if (!this.context) {
-      return;
-    }
-
-    const settings = this.settings();
-    this.master?.gain.setTargetAtTime(
-      settings.audio ? this.ambienceTarget : 0,
-      this.context.currentTime,
-      0.05,
-    );
-    this.effects?.gain.setTargetAtTime(
-      settings.effectsVolume,
-      this.context.currentTime,
-      0.04,
-    );
-
-    if (!settings.audio) {
       return;
     }
 
@@ -79,63 +132,115 @@ export class AudioDirector {
       0,
       this.heartbeatSilenceTimer - delta,
     );
+    this.heartbeatIntensity = clampAudio(
+      Math.max(this.heartbeatIntensity - delta * 0.18, danger),
+      0,
+      1,
+    );
 
-    if (this.heartbeatSilenceTimer > 0) {
+    const settings = this.settings();
+    this.syncMuteState(settings);
+    const muted = !settings.audio || !this.active;
+    this.master?.gain.setTargetAtTime(
+      muted ? 0 : 1,
+      this.context.currentTime,
+      0.04,
+    );
+    this.music?.gain.setTargetAtTime(
+      settings.musicVolume,
+      this.context.currentTime,
+      0.08,
+    );
+    this.effects?.gain.setTargetAtTime(
+      settings.effectsVolume,
+      this.context.currentTime,
+      0.04,
+    );
+    this.updateLoopVolumes(settings, muted);
+    this.updateActiveAudio(settings, muted);
+  }
+
+  startGameplayLoops() {
+    if (!this.settings().audio) {
       return;
     }
 
-    this.heartbeatTimer -= delta;
-
-    if (this.heartbeatTimer <= 0) {
-      this.heartbeatTimer = this.observerMode ? 0.56 : 1.12;
-      this.heartbeat();
-    }
+    this.active = true;
+    this.prepareLoops();
+    this.resumeActiveLoops();
+    this.stopAudio(this.loops.revelationBed);
+    this.ambienceDuck = 1;
   }
 
   fadeForReveal() {
-    if (!this.context || !this.master) {
+    if (!this.context) {
       return;
     }
 
-    this.ambienceTarget = 0.015;
-    this.master.gain.cancelScheduledValues(this.context.currentTime);
-    this.master.gain.setValueAtTime(
-      this.master.gain.value,
-      this.context.currentTime,
-    );
-    this.master.gain.linearRampToValueAtTime(
-      0.015,
-      this.context.currentTime + 1.2,
-    );
+    this.prepareLoops();
+    this.ambienceDuck = 0.18;
+    this.playLoop("revelationBed");
+  }
+
+  startRevelation() {
+    this.fadeForReveal();
+    this.playSfx("eyeOpen", 0.5);
   }
 
   restoreAfterReveal() {
-    if (!this.context || !this.master) {
+    if (!this.context) {
       return;
     }
 
-    this.ambienceTarget = 0.18;
-    this.master.gain.cancelScheduledValues(this.context.currentTime);
-    this.master.gain.setValueAtTime(
-      this.master.gain.value,
-      this.context.currentTime,
-    );
-    this.master.gain.linearRampToValueAtTime(
-      0.18,
-      this.context.currentTime + 0.7,
-    );
+    this.ambienceDuck = 1;
+    this.stopAudio(this.loops.revelationBed);
+    this.startGameplayLoops();
   }
 
-  playVoice(key: VoiceClipKey) {
+  playVoice(key: VoiceClipKey, volume = 1) {
     const settings = this.settings();
 
     if (!settings.audio) {
       return;
     }
 
-    const audio = new Audio(voiceClips[key]);
-    audio.volume = settings.voiceVolume;
-    audio.play().catch(() => undefined);
+    const audio = this.createOneShot(
+      voiceClips[key],
+      settings.voiceVolume * volume,
+    );
+    this.activeVoices.push({ audio, volume });
+    this.playAudio(audio);
+  }
+
+  playSfx(key: SfxKey, volume = 1) {
+    const settings = this.settings();
+
+    if (!settings.audio) {
+      return;
+    }
+
+    const audio = this.createOneShot(
+      sfxAssets[key],
+      settings.effectsVolume * volume,
+    );
+    this.activeSfx.push({ audio, volume });
+    this.playAudio(audio);
+  }
+
+  pressure() {
+    this.playSfx("youArePressure", 0.32);
+  }
+
+  hostBind() {
+    this.playSfx("hostBind", 0.72);
+  }
+
+  observerLock() {
+    this.playSfx("observerLock", 0.7);
+  }
+
+  signalSever() {
+    this.playSfx("signalSever", 0.78);
   }
 
   tone(
@@ -149,13 +254,13 @@ export class AudioDirector {
       | "tension",
   ) {
     const map = {
-      capture: [176, 0.22, 0.12],
-      close: [92, 0.16, 0.09],
-      dash: [240, 0.07, 0.05],
-      observer: [66, 0.18, 0.08],
-      reveal: [36, 0.8, 0.13],
-      sever: [28, 0.38, 0.16],
-      tension: [310, 0.06, 0.035],
+      capture: [176, 0.22, 0.09],
+      close: [92, 0.16, 0.07],
+      dash: [240, 0.07, 0.04],
+      observer: [66, 0.18, 0.05],
+      reveal: [36, 0.8, 0.06],
+      sever: [28, 0.38, 0.11],
+      tension: [310, 0.06, 0.025],
     } satisfies Record<string, [number, number, number]>;
     const [frequency, duration, volume] = map[name];
 
@@ -166,14 +271,138 @@ export class AudioDirector {
     return useGameUiStore.getState().settings;
   }
 
+  private prepareLoops() {
+    for (const key of Object.keys(loopAssets) as LoopKey[]) {
+      if (this.loops[key]) {
+        continue;
+      }
+
+      const audio = new Audio(loopAssets[key]);
+      audio.loop = true;
+      audio.preload = "auto";
+      audio.volume = 0;
+      this.loops[key] = audio;
+    }
+  }
+
+  private playLoop(key: LoopKey) {
+    const audio = this.loops[key];
+
+    if (!audio || !this.settings().audio) {
+      return;
+    }
+
+    audio.play().catch(() => undefined);
+  }
+
+  private resumeActiveLoops() {
+    this.playLoop("ambience");
+    this.playLoop("heartbeat");
+
+    if (this.ambienceDuck < 1) {
+      this.playLoop("revelationBed");
+    }
+  }
+
+  private syncMuteState(settings: GameSettings) {
+    if (settings.audio === this.lastAudioEnabled) {
+      return;
+    }
+
+    this.lastAudioEnabled = settings.audio;
+
+    if (!settings.audio) {
+      this.stopAudibleInstances();
+      return;
+    }
+
+    if (this.active) {
+      this.resumeActiveLoops();
+    }
+  }
+
+  private stopAudibleInstances() {
+    for (const audio of Object.values(this.loops)) {
+      this.stopAudio(audio);
+    }
+
+    for (const active of [...this.activeVoices, ...this.activeSfx]) {
+      this.stopAudio(active.audio);
+    }
+
+    this.activeVoices = [];
+    this.activeSfx = [];
+  }
+
+  private updateLoopVolumes(settings: GameSettings, muted: boolean) {
+    const musicVolume = muted ? 0 : settings.musicVolume;
+    const heartbeatLevel =
+      this.heartbeatSilenceTimer > 0
+        ? 0
+        : baseLoopVolumes.heartbeat +
+          this.heartbeatIntensity * (this.observerMode ? 0.16 : 0.08);
+    const targets = {
+      ambience: baseLoopVolumes.ambience * musicVolume * this.ambienceDuck,
+      heartbeat: heartbeatLevel * musicVolume * this.ambienceDuck,
+      revelationBed:
+        baseLoopVolumes.revelationBed *
+        musicVolume *
+        (this.ambienceDuck < 1 ? 1 : 0),
+    } satisfies Record<LoopKey, number>;
+
+    for (const key of Object.keys(targets) as LoopKey[]) {
+      const audio = this.loops[key];
+
+      if (audio) {
+        audio.volume = clampAudio(targets[key], 0, 1);
+      }
+    }
+  }
+
+  private updateActiveAudio(settings: GameSettings, muted: boolean) {
+    this.activeVoices = this.activeVoices.filter(
+      (active) => !active.audio.ended,
+    );
+    this.activeSfx = this.activeSfx.filter((active) => !active.audio.ended);
+
+    for (const active of this.activeVoices) {
+      active.audio.volume = muted ? 0 : settings.voiceVolume * active.volume;
+    }
+
+    for (const active of this.activeSfx) {
+      active.audio.volume = muted ? 0 : settings.effectsVolume * active.volume;
+    }
+  }
+
+  private createOneShot(src: string, volume: number) {
+    const audio = new Audio(src);
+    audio.preload = "auto";
+    audio.volume = clampAudio(volume, 0, 1);
+
+    return audio;
+  }
+
+  private playAudio(audio: HTMLAudioElement) {
+    audio.play().catch(() => undefined);
+  }
+
+  private stopAudio(audio: HTMLAudioElement | undefined) {
+    if (!audio) {
+      return;
+    }
+
+    audio.pause();
+    audio.currentTime = 0;
+  }
+
   private startDrone() {
-    if (!this.context || !this.effects) {
+    if (!this.context || !this.music) {
       return;
     }
 
     for (const [frequency, volume, type] of [
-      [43, 0.13, "sine"],
-      [64.5, 0.055, "triangle"],
+      [43, 0.035, "sine"],
+      [64.5, 0.018, "triangle"],
     ] as const) {
       const oscillator = this.context.createOscillator();
       const gain = this.context.createGain();
@@ -181,33 +410,10 @@ export class AudioDirector {
       oscillator.type = type;
       gain.gain.value = volume;
       oscillator.connect(gain);
-      gain.connect(this.effects);
+      gain.connect(this.music);
       oscillator.start();
       this.drone.push({ oscillator, gain });
     }
-  }
-
-  private heartbeat() {
-    if (!this.context || !this.effects) {
-      return;
-    }
-
-    const now = this.context.currentTime;
-    const oscillator = this.context.createOscillator();
-    const gain = this.context.createGain();
-    oscillator.type = "sine";
-    oscillator.frequency.setValueAtTime(this.observerMode ? 78 : 58, now);
-    oscillator.frequency.exponentialRampToValueAtTime(38, now + 0.18);
-    gain.gain.setValueAtTime(0.0001, now);
-    gain.gain.exponentialRampToValueAtTime(
-      this.observerMode ? 0.23 : 0.11,
-      now + 0.02,
-    );
-    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.22);
-    oscillator.connect(gain);
-    gain.connect(this.effects);
-    oscillator.start(now);
-    oscillator.stop(now + 0.24);
   }
 
   private playTone(frequency: number, duration: number, volume: number) {
@@ -232,6 +438,9 @@ export class AudioDirector {
     oscillator.stop(now + duration + 0.02);
   }
 }
+
+const clampAudio = (value: number, min: number, max: number) =>
+  Math.min(max, Math.max(min, value));
 
 declare global {
   interface Window {

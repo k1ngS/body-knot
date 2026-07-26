@@ -16,6 +16,7 @@ export type GameSettings = {
   reducedMotion: boolean;
   screenShake: boolean;
   highContrast: boolean;
+  musicVolume: number;
   voiceVolume: number;
   effectsVolume: number;
 };
@@ -75,8 +76,9 @@ const defaultSettings: GameSettings = {
   reducedMotion: false,
   screenShake: true,
   highContrast: false,
-  voiceVolume: 0.82,
-  effectsVolume: 0.62,
+  musicVolume: 1,
+  voiceVolume: 1,
+  effectsVolume: 1,
 };
 
 const defaultDebug: DebugSnapshot = {

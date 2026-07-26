@@ -26,6 +26,7 @@ import {
 import {
   CHAIN_SEGMENT_LENGTH,
   CUTTER_MIN_SECONDS,
+  CUTTER_TELEGRAPH_SECONDS,
   FINAL_INTEGRITY,
   FINAL_ONBOARDING_SECONDS,
   FIXED_TIMESTEP,
@@ -84,7 +85,7 @@ const TUTORIAL_TARGET_INDEX = 5;
 const TUTORIAL_GATE_START_INDEX = TUTORIAL_TARGET_INDEX - 1;
 const TUTORIAL_GATE_END_INDEX = TUTORIAL_TARGET_INDEX + 2;
 const FOCUS_DEMO_SECONDS = 1.5;
-const REVEAL_SEQUENCE_READY_SECONDS = 8.2;
+const REVEAL_SEQUENCE_READY_SECONDS = 12.9;
 const HOST_CORE_RADIUS = 1.92;
 const FINAL_ROUTE_ANGLE_REQUIRED = (Math.PI * 4) / 3;
 
@@ -185,6 +186,7 @@ export class GameEngine {
 
   enterHost() {
     this.audio.init();
+    this.audio.startGameplayLoops();
     this.resetSimulation();
     this.phase = "playing";
     this.startedAt = performance.now() / 1000;
@@ -198,6 +200,7 @@ export class GameEngine {
   }
 
   restart() {
+    this.audio.stopAll();
     this.audio.setObserverMode(false);
     this.resetSimulation();
     this.phase = "menu";
@@ -527,7 +530,7 @@ export class GameEngine {
       this.accumulator -= FIXED_TIMESTEP;
     }
 
-    this.audio.tick(frameDelta);
+    this.audio.tick(frameDelta, this.audioDanger());
     this.render(now);
     this.animationFrame = requestAnimationFrame(this.loop);
   }
@@ -744,6 +747,7 @@ export class GameEngine {
         hit: false,
         demo: false,
       });
+      this.audio.observerLock();
       this.audio.tone("observer");
     }
 
@@ -1236,10 +1240,10 @@ export class GameEngine {
   private updateReveal(now: number) {
     const elapsed = now - this.phaseStartedAt;
     const stages = [
-      { at: 0.7, caption: strings.revealLines[0], voice: "i_see_you" },
-      { at: 2.55, caption: strings.revealLines[1], voice: "it_moves" },
-      { at: 4.45, caption: strings.revealLines[2], voice: "not_the_parasite" },
-      { at: 6.35, caption: strings.revealLines[3], voice: "you_are" },
+      { at: 0.2, caption: strings.revealLines[0], voice: "see_the_hand" },
+      { at: 4.15, caption: strings.revealLines[1], voice: "it_moves" },
+      { at: 6.9, caption: strings.revealLines[2], voice: "not_the_parasite" },
+      { at: 10.75, caption: strings.revealLines[3], voice: "you_are" },
     ] as const;
 
     for (let index = 0; index < stages.length; index += 1) {
@@ -1249,6 +1253,9 @@ export class GameEngine {
         this.revealStage = index;
         useGameUiStore.getState().setCaption(stage.caption);
         this.audio.playVoice(stage.voice);
+        if (stage.voice === "you_are") {
+          this.audio.pressure();
+        }
         this.audio.tone("reveal");
       }
     }
@@ -1745,6 +1752,7 @@ export class GameEngine {
     this.knot = { mode: "idle" };
     this.candidate = null;
     this.audio.tone("capture");
+    this.audio.hostBind();
     this.audio.tone("reveal");
     this.chainWave = 1;
     this.shake = Math.max(this.shake, 0.42);
@@ -2202,7 +2210,7 @@ export class GameEngine {
     this.revealReady = false;
     this.knot = { mode: "idle" };
     this.candidate = null;
-    this.audio.fadeForReveal();
+    this.audio.startRevelation();
     this.audio.tone("reveal");
     this.updateTitle("DON'T MOVE");
     const store = useGameUiStore.getState();
@@ -2517,8 +2525,17 @@ export class GameEngine {
     this.endingOutcome = "victory";
     this.audio.setObserverMode(false);
     this.audio.silenceHeartbeat(1.25);
-    this.audio.fadeForReveal();
-    this.audio.playVoice("back_again");
+    this.audio.playVoice("host_bound");
+    window.setTimeout(() => {
+      if (this.phase === "ending" && this.endingOutcome === "victory") {
+        this.audio.playVoice("motor_control");
+      }
+    }, 1450);
+    window.setTimeout(() => {
+      if (this.phase === "ending" && this.endingOutcome === "victory") {
+        this.audio.playVoice("never_outside");
+      }
+    }, 3200);
     this.updateTitle("YOU WERE NEVER OUTSIDE");
     const store = useGameUiStore.getState();
     store.setPhase("ending");
@@ -2540,6 +2557,13 @@ export class GameEngine {
     this.phase = "ending";
     this.endingOutcome = "failure";
     this.audio.setObserverMode(false);
+    this.audio.signalSever();
+    this.audio.playVoice("signal_severed");
+    window.setTimeout(() => {
+      if (this.phase === "ending" && this.endingOutcome === "failure") {
+        this.audio.playVoice("host_rejected");
+      }
+    }, 1550);
     this.audio.tone("sever");
     this.updateTitle("SIGNAL SEVERED");
     const store = useGameUiStore.getState();
@@ -2594,6 +2618,39 @@ export class GameEngine {
       influencedIds: this.focusInfluencedIds,
       pulse: this.focusPulse,
     };
+  }
+
+  private audioDanger() {
+    if (this.phase === "observer") {
+      const activeElapsed = Math.max(
+        0,
+        this.observerIntroElapsed - FINAL_ONBOARDING_SECONDS,
+      );
+      const timerPressure = activeElapsed / OBSERVER_DURATION;
+      const integrityPressure =
+        (FINAL_INTEGRITY - this.finalIntegrity) / FINAL_INTEGRITY;
+
+      return clamp(Math.max(0.42, timerPressure, integrityPressure), 0, 1);
+    }
+
+    if (this.phase === "playing") {
+      const revelationPressure = clamp(
+        (this.gameplayElapsed - 74) / (REVELATION_MIN_SECONDS - 74),
+        0,
+        1,
+      );
+      const cutterPressure = this.cutter?.target
+        ? clamp(this.cutter.telegraph / CUTTER_TELEGRAPH_SECONDS, 0, 1)
+        : 0;
+
+      return clamp(Math.max(revelationPressure, cutterPressure), 0, 1);
+    }
+
+    if (this.phase === "reveal") {
+      return 0.2;
+    }
+
+    return 0;
   }
 
   private currentCoreRouteFeedback(): CoreRouteFeedback {

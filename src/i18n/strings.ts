@@ -51,20 +51,24 @@ export const strings = {
     reducedMotion: "Reduced motion",
     shake: "Screen shake",
     highContrast: "High contrast",
+    music: "Music",
     voice: "Voice",
-    effects: "Effects",
+    effects: "SFX",
   },
 };
 
 export const voiceClips = {
-  back_again: "/audio/back_again.mp3",
-  get_out: "/audio/get_out.mp3",
-  i_see_you: "/audio/i_see_you.mp3",
-  it_moves: "/audio/it_moves.mp3",
-  it_stops: "/audio/it_stops.mp3",
-  let_me_out: "/audio/let_me_out.mp3",
-  not_the_parasite: "/audio/not_the_parasite.mp3",
-  you_are: "/audio/you_are.mp3",
+  get_out: "/audio/voice/get_out.wav",
+  host_bound: "/audio/voice/host_bound.wav",
+  host_rejected: "/audio/voice/host_rejected.wav",
+  it_moves: "/audio/voice/it_moves.wav",
+  let_me_out: "/audio/voice/let_me_out.wav",
+  motor_control: "/audio/voice/motor_control.wav",
+  never_outside: "/audio/voice/never_outside.wav",
+  not_the_parasite: "/audio/voice/not_the_parasite.wav",
+  see_the_hand: "/audio/voice/see_the_hand.wav",
+  signal_severed: "/audio/voice/signal_severed.wav",
+  you_are: "/audio/voice/you_are.wav",
 } as const;
 
 export type VoiceClipKey = keyof typeof voiceClips;

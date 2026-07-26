@@ -349,6 +349,11 @@ function SettingsPanel({
           </label>
         ))}
         <VolumeControl
+          label={strings.settingsLabels.music}
+          value={settings.musicVolume}
+          onChange={(musicVolume) => onChange({ musicVolume })}
+        />
+        <VolumeControl
           label={strings.settingsLabels.voice}
           value={settings.voiceVolume}
           onChange={(voiceVolume) => onChange({ voiceVolume })}
