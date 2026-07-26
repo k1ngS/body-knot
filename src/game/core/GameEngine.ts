@@ -87,6 +87,13 @@ const TUTORIAL_GATE_END_INDEX = TUTORIAL_TARGET_INDEX + 2;
 const FOCUS_DEMO_SECONDS = 1.5;
 const REVEAL_SEQUENCE_READY_SECONDS = 12.9;
 const HOST_CORE_RADIUS = 1.92;
+const HOST_CORE_EYE_EXCLUSION = {
+  minX: 5.6,
+  maxX: 26.4,
+  minY: 0,
+  maxY: 10.9,
+};
+const HOST_CORE_EYE_EXCLUSION_MARGIN = HOST_CORE_RADIUS * 2.55;
 const FINAL_ROUTE_ANGLE_REQUIRED = (Math.PI * 4) / 3;
 
 export class GameEngine {
@@ -2281,6 +2288,10 @@ export class GameEngine {
     for (const pos of candidates) {
       const scored = this.scoreHostCoreCandidate(pos);
 
+      if (scored.eyeRejected || !this.isHostCoreVisuallySafe(pos)) {
+        continue;
+      }
+
       if (!fallback || scored.fallbackScore > fallback.score) {
         fallback = { pos, score: scored.fallbackScore };
       }
@@ -2294,9 +2305,13 @@ export class GameEngine {
       }
     }
 
-    return (
-      best?.pos ?? fallback?.pos ?? { x: WORLD_SIZE * 0.5, y: WORLD_SIZE * 0.5 }
-    );
+    const selected = best?.pos ?? fallback?.pos;
+
+    if (selected && this.isHostCoreVisuallySafe(selected)) {
+      return selected;
+    }
+
+    return this.chooseHostCoreFallbackPosition();
   }
 
   private hostCoreCandidates() {
@@ -2354,6 +2369,57 @@ export class GameEngine {
     });
   }
 
+  private chooseHostCoreFallbackPosition() {
+    const margin = 4.8;
+    const candidates: Vec2[] = [];
+
+    for (let y = WORLD_SIZE - margin; y >= margin; y -= 1.2) {
+      for (let x = margin; x <= WORLD_SIZE - margin; x += 1.2) {
+        candidates.push({ x, y });
+      }
+    }
+
+    let safest: { pos: Vec2; score: number } | null = null;
+
+    for (const pos of candidates) {
+      if (!this.isHostCoreVisuallySafe(pos)) {
+        continue;
+      }
+
+      const scored = this.scoreHostCoreCandidate(pos);
+
+      if (scored.eyeRejected) {
+        continue;
+      }
+
+      const score = scored.rejected ? scored.fallbackScore : scored.score;
+
+      if (!safest || score > safest.score) {
+        safest = { pos, score };
+      }
+    }
+
+    return safest?.pos ?? { x: WORLD_SIZE * 0.5, y: WORLD_SIZE * 0.68 };
+  }
+
+  private isHostCoreVisuallySafe(pos: Vec2) {
+    const boundaryDistance = Math.min(
+      pos.x,
+      pos.y,
+      WORLD_SIZE - pos.x,
+      WORLD_SIZE - pos.y,
+    );
+
+    return boundaryDistance >= 3.25 && !this.hostCoreOverlapsEyeZone(pos);
+  }
+
+  private hostCoreOverlapsEyeZone(pos: Vec2) {
+    return (
+      distanceToRect(pos, HOST_CORE_EYE_EXCLUSION) <=
+      HOST_CORE_EYE_EXCLUSION_MARGIN
+    );
+  }
+
   private scoreHostCoreCandidate(pos: Vec2) {
     const playerDistance = dist(pos, this.player.pos);
     const chainDistance = this.nearestChainSegmentDistance(pos);
@@ -2382,7 +2448,9 @@ export class GameEngine {
     const cellCrowding = this.cells.filter(
       (cell) => dist(cell.pos, pos) < 4.5,
     ).length;
+    const eyeRejected = this.hostCoreOverlapsEyeZone(pos);
     const rejected =
+      eyeRejected ||
       playerDistance < 4.6 ||
       chainDistance < 2.45 ||
       boundaryDistance < 3.25 ||
@@ -2411,6 +2479,7 @@ export class GameEngine {
       cellCrowding * 0.16;
 
     return {
+      eyeRejected,
       rejected,
       score,
       fallbackScore:
@@ -2948,6 +3017,16 @@ const closestPointOnSegment = (point: Vec2, a: Vec2, b: Vec2): Vec2 => {
     x: a.x + ab.x * amount,
     y: a.y + ab.y * amount,
   };
+};
+
+const distanceToRect = (
+  point: Vec2,
+  rect: { minX: number; maxX: number; minY: number; maxY: number },
+) => {
+  const dx = Math.max(rect.minX - point.x, 0, point.x - rect.maxX);
+  const dy = Math.max(rect.minY - point.y, 0, point.y - rect.maxY);
+
+  return Math.hypot(dx, dy);
 };
 
 const cross = (a: Vec2, b: Vec2) => a.x * b.y - a.y * b.x;
