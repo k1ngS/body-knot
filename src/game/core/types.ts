@@ -13,6 +13,7 @@ export type Cell = {
   phase: number;
   highlighted: boolean;
   captured: boolean;
+  tutorial?: boolean;
 };
 
 export type FocusState = {
@@ -104,6 +105,7 @@ export type KnotCandidate = {
   cellIds: number[];
   previewCount: number;
   includesCore: boolean;
+  tutorial: boolean;
   pulse: number;
 };
 

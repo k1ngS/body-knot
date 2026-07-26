@@ -32,6 +32,8 @@ export type RenderSnapshot = {
   observerAttacks: ObserverAttack[];
   mouseScreen: Vec2;
   ghostRoute: Vec2[];
+  tutorialActive: boolean;
+  tutorialTargetIndex: number | null;
   shake: number;
   highContrast: boolean;
   reducedMotion: boolean;
@@ -114,6 +116,7 @@ export class CanvasRenderer {
     this.drawBackground(snapshot);
     this.drawScars(snapshot.scars);
     this.drawGhost(snapshot);
+    this.drawTutorialTarget(snapshot);
     this.drawHostCore(snapshot);
     this.drawCells(
       snapshot.cells,
@@ -143,7 +146,7 @@ export class CanvasRenderer {
     }
 
     if (snapshot.phase === "observer") {
-      this.drawObserverAttacks(snapshot.observerAttacks);
+      this.drawObserverAttacks(snapshot);
     }
 
     context.restore();
@@ -221,9 +224,12 @@ export class CanvasRenderer {
 
     const { context } = this;
     context.save();
-    context.setLineDash([5, 8]);
-    context.strokeStyle = snapshot.highContrast ? "#ffffff99" : "#80f4ff44";
-    context.lineWidth = 2;
+    const pulse = snapshot.reducedMotion
+      ? 0
+      : Math.sin(snapshot.time * 5.6) * 0.5 + 0.5;
+    context.setLineDash([7, 9]);
+    context.strokeStyle = snapshot.highContrast ? "#ffffffcc" : "#9cf2ff88";
+    context.lineWidth = 2.8;
     context.beginPath();
 
     for (const [index, point] of snapshot.ghostRoute.entries()) {
@@ -236,6 +242,66 @@ export class CanvasRenderer {
       }
     }
 
+    context.stroke();
+
+    if (!snapshot.reducedMotion) {
+      const segment = Math.floor(
+        (snapshot.time * 1.6) % (snapshot.ghostRoute.length - 1),
+      );
+      const amount = (snapshot.time * 1.6) % 1;
+      const start = snapshot.ghostRoute[segment];
+      const end = snapshot.ghostRoute[segment + 1];
+
+      if (start && end) {
+        const moving = this.worldToScreen(lerpWorld(start, end, amount));
+        context.setLineDash([]);
+        context.fillStyle = `rgba(234, 255, 255, ${0.72 + pulse * 0.24})`;
+        context.beginPath();
+        context.arc(moving.x, moving.y, 5 + pulse * 2.5, 0, Math.PI * 2);
+        context.fill();
+      }
+    }
+
+    context.restore();
+  }
+
+  private drawTutorialTarget(snapshot: RenderSnapshot) {
+    if (
+      !snapshot.tutorialActive ||
+      snapshot.phase !== "playing" ||
+      snapshot.tutorialTargetIndex == null
+    ) {
+      return;
+    }
+
+    const a = snapshot.chain[snapshot.tutorialTargetIndex];
+    const b = snapshot.chain[snapshot.tutorialTargetIndex + 1];
+
+    if (!a || !b) {
+      return;
+    }
+
+    const { context } = this;
+    const start = this.worldToScreen(a.pos);
+    const end = this.worldToScreen(b.pos);
+    const pulse = snapshot.reducedMotion
+      ? 0.7
+      : 0.62 + Math.sin(snapshot.time * 7.5) * 0.28;
+    context.save();
+    context.lineCap = "round";
+    context.strokeStyle = snapshot.highContrast
+      ? `rgba(255,255,255,${0.7 + pulse * 0.2})`
+      : `rgba(156,242,255,${0.68 + pulse * 0.26})`;
+    context.lineWidth = 10;
+    context.beginPath();
+    context.moveTo(start.x, start.y);
+    context.lineTo(end.x, end.y);
+    context.stroke();
+    context.strokeStyle = "#eaffff";
+    context.lineWidth = 2;
+    context.beginPath();
+    context.moveTo(start.x, start.y);
+    context.lineTo(end.x, end.y);
     context.stroke();
     context.restore();
   }
@@ -253,8 +319,13 @@ export class CanvasRenderer {
     const pulse = snapshot.reducedMotion
       ? 0.2
       : 0.5 + Math.sin(snapshot.time * 5 + core.pulse) * 0.5;
+    const onboarding = snapshot.phase === "observer" && snapshot.time < 4;
     const radius =
-      core.radius * this.scale * (1 + pulse * 0.08) * (1 - bind * 0.28);
+      core.radius *
+      this.scale *
+      1.12 *
+      (1 + pulse * (onboarding ? 0.16 : 0.1)) *
+      (1 - bind * 0.28);
     context.save();
     context.translate(screen.x, screen.y);
 
@@ -267,33 +338,37 @@ export class CanvasRenderer {
 
     if (snapshot.phase === "observer") {
       context.save();
-      context.globalAlpha = 0.36 + pulse * 0.18;
+      context.globalAlpha = onboarding
+        ? 0.52 + pulse * 0.24
+        : 0.28 + pulse * 0.14;
       context.strokeStyle = "#c8ffff";
-      context.lineWidth = 1.6;
-      context.setLineDash([10, 9]);
+      context.lineWidth = onboarding ? 2.3 : 1.4;
+      context.setLineDash(onboarding ? [14, 8] : [10, 11]);
       context.beginPath();
       context.ellipse(
         0,
         0,
-        radius * 2.35,
-        radius * 1.45,
+        radius * 2.15,
+        radius * 1.34,
         -0.48,
         -Math.PI * 0.15,
-        Math.PI * 1.35,
+        onboarding ? Math.PI * 1.5 : Math.PI * 1.2,
       );
       context.stroke();
       context.restore();
     }
 
-    context.rotate(snapshot.time * 0.24);
+    context.rotate(snapshot.time * 0.18);
     context.fillStyle = core.state === "bound" ? "#eafcff" : "#1a060a";
     context.strokeStyle = core.state === "bound" ? "#eaffff" : "#d6404f";
-    context.lineWidth = 2.4;
+    context.lineWidth = 3;
     context.beginPath();
 
-    for (let index = 0; index < 12; index += 1) {
-      const angle = (index / 12) * Math.PI * 2;
-      const pointRadius = radius * (index % 2 === 0 ? 1.08 : 0.7);
+    for (let index = 0; index < 18; index += 1) {
+      const angle = (index / 18) * Math.PI * 2;
+      const lobe = Math.sin(angle * 3 + snapshot.time * 0.9) * 0.08;
+      const pointRadius =
+        radius * (index % 2 === 0 ? 1.08 + lobe : 0.78 - lobe * 0.5);
       const x = Math.cos(angle) * pointRadius;
       const y = Math.sin(angle) * pointRadius;
 
@@ -307,11 +382,31 @@ export class CanvasRenderer {
     context.closePath();
     context.fill();
     context.stroke();
-    context.strokeStyle = "#f0ffff99";
-    context.lineWidth = 1.2;
+    context.rotate(-snapshot.time * 0.18);
+    context.globalAlpha = 0.78 + pulse * 0.2;
+    context.strokeStyle = "#f0ffffcc";
+    context.lineWidth = onboarding ? 2 : 1.4;
     context.beginPath();
-    context.ellipse(0, 0, radius * 0.42, radius * 0.72, 0.2, 0, Math.PI * 2);
+    context.arc(0, 0, radius * (0.38 + pulse * 0.06), 0, Math.PI * 2);
     context.stroke();
+    context.globalAlpha = 0.54;
+    context.beginPath();
+    context.arc(0, 0, radius * 0.18, 0, Math.PI * 2);
+    context.fillStyle = "#eaffff";
+    context.fill();
+
+    if (onboarding) {
+      context.globalAlpha = 1;
+      context.font = "900 13px Arial, Helvetica, sans-serif";
+      context.textAlign = "center";
+      context.textBaseline = "middle";
+      context.fillStyle = "#eaffff";
+      context.strokeStyle = "#020304";
+      context.lineWidth = 5;
+      context.strokeText("HOST CORE", 0, -radius * 1.72);
+      context.fillText("HOST CORE", 0, -radius * 1.72);
+    }
+
     context.restore();
   }
 
@@ -336,6 +431,10 @@ export class CanvasRenderer {
       const isCandidate = candidateCellIds.has(cell.id);
       const isFocused = focusCellIds.has(cell.id);
 
+      if (red && !isCandidate && !isFocused && !cell.highlighted) {
+        context.globalAlpha = 0.44;
+      }
+
       if (isFocused) {
         const lean = normalize({
           x: focusWorld.x - cell.pos.x,
@@ -347,16 +446,16 @@ export class CanvasRenderer {
 
       if (cell.highlighted || isCandidate || isFocused) {
         context.strokeStyle = isCandidate
-          ? "#a8fbffcc"
+          ? "#eaffff"
           : isFocused
             ? "#d6dedc88"
             : "#c9fbff77";
-        context.lineWidth = isCandidate ? 2.4 : isFocused ? 1.3 : 1.6;
+        context.lineWidth = isCandidate ? 3.4 : isFocused ? 1.4 : 1.6;
         context.beginPath();
         context.arc(
           0,
           0,
-          radius * (isCandidate ? 2.12 : isFocused ? 1.85 : 1.62),
+          radius * (isCandidate ? 2.42 : isFocused ? 1.85 : 1.62),
           0,
           Math.PI * 2,
         );
@@ -491,7 +590,10 @@ export class CanvasRenderer {
   private drawKnotGate(snapshot: RenderSnapshot) {
     const candidate = snapshot.candidate;
 
-    if (!candidate || snapshot.phase !== "playing") {
+    if (
+      !candidate ||
+      (snapshot.phase !== "playing" && snapshot.phase !== "observer")
+    ) {
       return;
     }
 
@@ -510,9 +612,16 @@ export class CanvasRenderer {
     context.lineCap = "round";
     context.lineJoin = "round";
 
-    if (candidate.previewCount > 0 && candidate.polygon.length > 2) {
-      context.globalAlpha = 0.08 + pulse * 0.05;
-      context.fillStyle = snapshot.highContrast ? "#ffffff" : "#9cf2ff";
+    if (candidate.polygon.length > 2) {
+      const valid = candidate.previewCount > 0;
+      context.globalAlpha = valid ? 0.14 + pulse * 0.06 : 0.045;
+      context.fillStyle = valid
+        ? snapshot.highContrast
+          ? "#ffffff"
+          : candidate.includesCore
+            ? "#e63848"
+            : "#9cf2ff"
+        : "#9aa8a6";
       context.beginPath();
 
       for (const [index, point] of candidate.polygon.entries()) {
@@ -527,15 +636,26 @@ export class CanvasRenderer {
 
       context.closePath();
       context.fill();
+      context.globalAlpha = valid ? 0.42 : 0.18;
+      context.strokeStyle = valid
+        ? candidate.includesCore
+          ? "#ff6570"
+          : "#c8ffff"
+        : "#6f7877";
+      context.lineWidth = valid ? 2.2 : 1.2;
+      context.stroke();
     }
 
     context.globalAlpha = 1;
     const start = this.worldToScreen(a.pos);
     const end = this.worldToScreen(b.pos);
-    context.strokeStyle = snapshot.highContrast
-      ? `rgba(255, 255, 255, ${0.65 + pulse * 0.25})`
-      : `rgba(156, 242, 255, ${0.55 + pulse * 0.32})`;
-    context.lineWidth = 7;
+    context.strokeStyle =
+      candidate.previewCount > 0
+        ? snapshot.highContrast
+          ? `rgba(255, 255, 255, ${0.78 + pulse * 0.18})`
+          : `rgba(176, 255, 255, ${0.72 + pulse * 0.24})`
+        : `rgba(135, 151, 151, ${0.34 + pulse * 0.16})`;
+    context.lineWidth = candidate.previewCount > 0 ? 10 : 5;
     context.beginPath();
     context.moveTo(start.x, start.y);
     context.lineTo(end.x, end.y);
@@ -544,9 +664,9 @@ export class CanvasRenderer {
     const point = this.worldToScreen(candidate.point);
     context.translate(point.x, point.y);
     context.rotate(candidate.pulse * 0.35);
-    context.strokeStyle = candidate.previewCount > 0 ? "#eaffff" : "#91a7aa";
-    context.lineWidth = 2;
-    const marker = 8 + pulse * 5;
+    context.strokeStyle = candidate.previewCount > 0 ? "#eaffff" : "#7f9090";
+    context.lineWidth = candidate.previewCount > 0 ? 3 : 1.6;
+    const marker = candidate.previewCount > 0 ? 13 + pulse * 6 : 9 + pulse * 2;
     context.beginPath();
     context.moveTo(-marker, -marker);
     context.lineTo(marker, marker);
@@ -559,12 +679,12 @@ export class CanvasRenderer {
 
     if (candidate.previewCount > 0) {
       context.rotate(-candidate.pulse * 0.35);
-      context.font = "900 12px Arial, Helvetica, sans-serif";
+      context.font = "900 18px Arial, Helvetica, sans-serif";
       context.textAlign = "center";
       context.textBaseline = "middle";
       context.fillStyle = "#eaffff";
       context.strokeStyle = "#020304";
-      context.lineWidth = 4;
+      context.lineWidth = 5;
       const text = `x${candidate.previewCount}`;
       context.strokeText(text, 0, -marker * 2.9);
       context.fillText(text, 0, -marker * 2.9);
@@ -702,41 +822,52 @@ export class CanvasRenderer {
     const direction = normalize(player.vel);
     const radius = player.radius * this.scale * 1.32;
     context.save();
-    context.fillStyle = horror ? "#6f111aaa" : "#dffbff18";
+    context.fillStyle = horror ? "#6f111a88" : "#dffbff16";
     context.beginPath();
     context.arc(screen.x, screen.y, radius * 1.85, 0, Math.PI * 2);
     context.fill();
     context.translate(screen.x, screen.y);
     context.rotate(Math.atan2(direction.y, direction.x) + Math.PI / 2);
-    context.fillStyle = horror ? "#ded3c7" : "#bec8c5";
-    context.strokeStyle = horror ? "#b72935" : "#ecfffb";
+    context.fillStyle = horror ? "#d9cec1" : "#c7d2cf";
+    context.strokeStyle = horror ? "#e0525e" : "#ecfffb";
     context.lineWidth = 1.8;
     context.beginPath();
-    context.moveTo(0, -radius * 1.64);
+    context.moveTo(0, -radius * 1.95);
     context.bezierCurveTo(
-      radius * 0.96,
-      -radius * 0.86,
-      radius * 1.08,
-      radius * 0.42,
-      radius * 0.44,
-      radius * 1.02,
+      radius * 0.72,
+      -radius * 1.12,
+      radius * 0.52,
+      radius * 0.12,
+      radius * 0.18,
+      radius * 0.82,
     );
-    context.lineTo(0, radius * 0.48);
-    context.lineTo(-radius * 0.44, radius * 1.02);
+    context.lineTo(radius * 0.62, radius * 1.36);
+    context.lineTo(0, radius * 0.98);
+    context.lineTo(-radius * 0.62, radius * 1.36);
     context.bezierCurveTo(
-      -radius * 1.08,
-      radius * 0.42,
-      -radius * 0.96,
-      -radius * 0.86,
+      -radius * 0.52,
+      radius * 0.12,
+      -radius * 0.72,
+      -radius * 1.12,
       0,
-      -radius * 1.64,
+      -radius * 1.95,
     );
     context.closePath();
     context.fill();
     context.stroke();
-    context.fillStyle = horror ? "#9b202b" : "#f3fffb";
+    context.strokeStyle = horror ? "#7d1a24" : "#839391";
+    context.lineWidth = 1;
     context.beginPath();
-    context.arc(0, 0, radius * 0.28, 0, Math.PI * 2);
+    context.moveTo(0, -radius * 1.26);
+    context.lineTo(0, radius * 0.62);
+    context.stroke();
+    context.fillStyle = horror ? "#b82a36" : "#f3fffb";
+    context.beginPath();
+    context.moveTo(0, -radius * 0.24);
+    context.lineTo(radius * 0.22, radius * 0.04);
+    context.lineTo(0, radius * 0.31);
+    context.lineTo(-radius * 0.22, radius * 0.04);
+    context.closePath();
     context.fill();
     context.restore();
   }
@@ -744,7 +875,10 @@ export class CanvasRenderer {
   private drawFocus(snapshot: RenderSnapshot) {
     const focus = snapshot.focus;
 
-    if (!focus.active && snapshot.phase !== "observer") {
+    if (
+      (!focus.active && snapshot.phase !== "observer") ||
+      (snapshot.phase === "playing" && focus.influencedIds.length === 0)
+    ) {
       return;
     }
 
@@ -755,10 +889,9 @@ export class CanvasRenderer {
       ? 0
       : Math.sin(snapshot.time * (strong ? 8 : 4.2) + focus.pulse) * 2.5;
     const ringRadius = red
-      ? 16 + pulse
-      : strong
-        ? 18 + pulse
-        : 12 + pulse * 0.4;
+      ? 18 + pulse
+      : clamp(focus.radius * this.scale * 0.55, 42, 76) +
+        (strong ? pulse * 2.2 : pulse * 0.5);
 
     context.save();
 
@@ -775,9 +908,9 @@ export class CanvasRenderer {
         }
 
         const cellScreen = this.worldToScreen(cell.pos);
-        context.globalAlpha = 0.22;
+        context.globalAlpha = strong ? 0.24 : 0.17;
         context.strokeStyle = "#c7d1cf";
-        context.lineWidth = 1;
+        context.lineWidth = strong ? 1.35 : 1;
         context.beginPath();
         context.moveTo(focusScreen.x, focusScreen.y);
         context.quadraticCurveTo(
@@ -796,9 +929,9 @@ export class CanvasRenderer {
     context.strokeStyle = red
       ? "#b72935dd"
       : strong
-        ? "#d7dfddbb"
-        : "#b7c0c188";
-    context.lineWidth = red ? 2 : strong ? 1.5 : 1.1;
+        ? "#d7dfdd99"
+        : "#b7c0c166";
+    context.lineWidth = red ? 2 : strong ? 1.7 : 1.2;
     context.beginPath();
     context.ellipse(
       0,
@@ -812,7 +945,7 @@ export class CanvasRenderer {
     context.stroke();
 
     if (strong) {
-      context.globalAlpha = red ? 0.5 : 0.28;
+      context.globalAlpha = red ? 0.5 : 0.24;
       context.beginPath();
       context.arc(0, 0, ringRadius * 1.45, 0, Math.PI * 2);
       context.stroke();
@@ -858,27 +991,13 @@ export class CanvasRenderer {
     context.globalAlpha = 1;
   }
 
-  private drawObserverAttacks(attacks: ObserverAttack[]) {
+  private drawObserverAttacks(snapshot: RenderSnapshot) {
     const { context } = this;
+    const eye = this.observerEyeCenter(snapshot);
 
-    for (const attack of attacks) {
+    for (const attack of snapshot.observerAttacks) {
       const progress = 1 - attack.life / attack.maxLife;
       context.globalAlpha = clamp(attack.life / attack.maxLife, 0, 1);
-      context.strokeStyle = attack.demo
-        ? "#d8d0c2aa"
-        : attack.hit
-          ? "#ff4050"
-          : "#e63848";
-      context.lineWidth = attack.hit ? 5 : 2;
-      context.beginPath();
-      context.arc(
-        attack.pos.x,
-        attack.pos.y,
-        attack.hit ? 14 + progress * 74 : attack.radius + progress * 12,
-        0,
-        Math.PI * 2,
-      );
-      context.stroke();
 
       if (!attack.hit) {
         const charge = clamp(
@@ -886,16 +1005,49 @@ export class CanvasRenderer {
           0,
           1,
         );
-        context.globalAlpha = attack.demo ? 0.45 : 0.78;
+        context.save();
+        context.globalAlpha = attack.demo ? 0.28 : 0.42 + charge * 0.2;
+        context.strokeStyle = attack.demo ? "#d8d0c2aa" : "#e63848aa";
+        context.lineWidth = attack.demo ? 1.4 : 2;
+        context.setLineDash([8, 8]);
+        context.beginPath();
+        context.moveTo(eye.x, eye.y);
+        context.lineTo(attack.pos.x, attack.pos.y);
+        context.stroke();
+        context.setLineDash([]);
+        context.restore();
+
+        context.globalAlpha = attack.demo ? 0.5 : 0.86;
+        context.strokeStyle = attack.demo ? "#d8d0c2" : "#ff4050";
+        context.lineWidth = attack.demo ? 2 : 2.6;
         context.beginPath();
         context.arc(
           attack.pos.x,
           attack.pos.y,
-          attack.radius * 1.35,
+          attack.radius * 0.72,
+          0,
+          Math.PI * 2,
+        );
+        context.stroke();
+        context.beginPath();
+        context.arc(
+          attack.pos.x,
+          attack.pos.y,
+          attack.radius * 1.32,
           -Math.PI / 2,
           -Math.PI / 2 + Math.PI * 2 * charge,
         );
         context.stroke();
+        context.globalAlpha = attack.demo ? 0.34 : 0.5;
+        context.fillStyle = attack.demo ? "#d8d0c2" : "#e63848";
+        context.beginPath();
+        context.moveTo(attack.pos.x, attack.pos.y - attack.radius * 0.52);
+        context.lineTo(attack.pos.x + attack.radius * 0.38, attack.pos.y);
+        context.lineTo(attack.pos.x, attack.pos.y + attack.radius * 0.52);
+        context.lineTo(attack.pos.x - attack.radius * 0.38, attack.pos.y);
+        context.closePath();
+        context.fill();
+        context.globalAlpha = attack.demo ? 0.48 : 0.9;
         context.beginPath();
         context.moveTo(attack.pos.x - attack.radius * 1.8, attack.pos.y);
         context.lineTo(attack.pos.x - attack.radius * 0.7, attack.pos.y);
@@ -906,10 +1058,31 @@ export class CanvasRenderer {
         context.moveTo(attack.pos.x, attack.pos.y + attack.radius * 0.7);
         context.lineTo(attack.pos.x, attack.pos.y + attack.radius * 1.8);
         context.stroke();
+      } else {
+        context.strokeStyle = "#ff4050";
+        context.lineWidth = 5;
+        context.beginPath();
+        context.arc(
+          attack.pos.x,
+          attack.pos.y,
+          14 + progress * 74,
+          0,
+          Math.PI * 2,
+        );
+        context.stroke();
       }
     }
 
     context.globalAlpha = 1;
+  }
+
+  private observerEyeCenter(snapshot: RenderSnapshot) {
+    const big = snapshot.phase === "reveal" || snapshot.phase === "ending";
+
+    return {
+      x: this.width * 0.5,
+      y: big ? this.height * 0.38 : this.height * 0.22,
+    };
   }
 
   private drawCursorPresence(snapshot: RenderSnapshot) {
