@@ -5,6 +5,7 @@ import {
   pointInPolygon,
   polygonArea,
   polygonCentroid,
+  simplifyPath,
 } from "../geometry/polygon";
 import { clamp, dist, normalize, type Vec2, vec } from "../geometry/vector";
 import { CanvasRenderer } from "../rendering/CanvasRenderer";
@@ -48,6 +49,7 @@ import type {
   Cell,
   CellType,
   ChainLink,
+  CoreRouteFeedback,
   Cutter,
   FocusState,
   HostCore,
@@ -79,10 +81,12 @@ type EndingOutcome = "victory" | "failure" | null;
 
 const isDevelopment = process.env.NODE_ENV !== "production";
 const TUTORIAL_TARGET_INDEX = 5;
+const TUTORIAL_GATE_START_INDEX = TUTORIAL_TARGET_INDEX - 1;
+const TUTORIAL_GATE_END_INDEX = TUTORIAL_TARGET_INDEX + 2;
 const FOCUS_DEMO_SECONDS = 1.5;
 const REVEAL_SEQUENCE_READY_SECONDS = 8.2;
 const HOST_CORE_RADIUS = 1.92;
-const FINAL_ROUTE_ANGLE_REQUIRED = Math.PI * 1.5;
+const FINAL_ROUTE_ANGLE_REQUIRED = (Math.PI * 4) / 3;
 
 export class GameEngine {
   private renderer: CanvasRenderer;
@@ -110,6 +114,8 @@ export class GameEngine {
   private finalCoreRouteLength = 0;
   private finalCoreLastAngle: number | null = null;
   private finalCoreLastPlayerPos: Vec2 = vec();
+  private finalCoreStalledSeconds = 0;
+  private finalGuideTargetIndex: number | null = null;
   private finalStartPlayerPos: Vec2 = vec();
   private finalStartChain: Vec2[] = [];
   private endingOutcome: EndingOutcome = null;
@@ -149,7 +155,7 @@ export class GameEngine {
     { x: 16.75, y: 21.35 },
     { x: 15.35, y: 20.55 },
     { x: 15.2, y: 19.1 },
-    { x: 16.85, y: 18.45 },
+    { x: 16.9, y: 18.28 },
   ];
 
   constructor(canvas: HTMLCanvasElement) {
@@ -280,6 +286,8 @@ export class GameEngine {
     this.finalCoreRouteLength = 0;
     this.finalCoreLastAngle = null;
     this.finalCoreLastPlayerPos = { ...this.player.pos };
+    this.finalCoreStalledSeconds = 0;
+    this.finalGuideTargetIndex = null;
     this.finalStartPlayerPos = { ...this.player.pos };
     this.finalStartChain = [];
     this.endingOutcome = null;
@@ -709,10 +717,11 @@ export class GameEngine {
       this.updateKnotCapture(delta);
     } else if (this.observerIntroElapsed >= FINAL_ONBOARDING_SECONDS) {
       this.updatePlayer(delta, 24.5, 5.05);
-      this.updateFinalCoreRoute();
+      this.updateFinalCoreRoute(delta);
     } else {
       this.finalCoreLastPlayerPos = { ...this.player.pos };
       this.finalCoreLastAngle = null;
+      this.finalCoreStalledSeconds = 0;
     }
 
     this.updateFinalPrompt();
@@ -900,6 +909,52 @@ export class GameEngine {
     return true;
   }
 
+  private isNearFinalCoreCandidate(selfKnot: SelfKnot) {
+    const core = this.hostCore;
+
+    if (
+      this.phase !== "observer" ||
+      core?.state !== "dormant" ||
+      this.observerIntroElapsed < FINAL_ONBOARDING_SECONDS
+    ) {
+      return false;
+    }
+
+    if (!this.coreInsidePolygon(selfKnot.polygon)) {
+      return false;
+    }
+
+    if (selfKnot.span < MIN_KNOT_SPAN) {
+      return false;
+    }
+
+    const minimumArea = this.finalMinimumArea();
+    const minimumRouteLength = this.finalMinimumRouteLength();
+    const crossingDistance = dist(selfKnot.intersection, core.pos);
+    const initialChainDistance = this.nearestFinalStartChainDistance(
+      selfKnot.intersection,
+    );
+    const angularEnough =
+      this.finalCoreAngularTravel >= FINAL_ROUTE_ANGLE_REQUIRED * 0.74;
+    const lengthEnough = this.finalCoreRouteLength >= minimumRouteLength * 0.68;
+    const areaEnough = selfKnot.area >= minimumArea * 0.72;
+    const movedEnough =
+      dist(this.player.pos, this.finalStartPlayerPos) >= core.radius * 0.88;
+    const noObviousShortcut =
+      initialChainDistance >= 0.2 ||
+      this.finalCoreRouteLength >= core.radius * 2.65;
+
+    return (
+      angularEnough &&
+      lengthEnough &&
+      areaEnough &&
+      movedEnough &&
+      noObviousShortcut &&
+      crossingDistance >= core.radius * 0.85 &&
+      crossingDistance <= core.radius * 5.15
+    );
+  }
+
   private hasFinalRouteProgress(area: number) {
     const core = this.hostCore;
 
@@ -907,19 +962,28 @@ export class GameEngine {
       return false;
     }
 
-    const minimumArea = Math.max(core.radius * core.radius * 1.85, 6.4);
-    const minimumRouteLength = core.radius * 2.7;
-
     return (
       this.finalCoreAngularTravel >= FINAL_ROUTE_ANGLE_REQUIRED &&
-      this.finalCoreRouteLength >= minimumRouteLength &&
-      area >= minimumArea &&
+      this.finalCoreRouteLength >= this.finalMinimumRouteLength() &&
+      area >= this.finalMinimumArea() &&
       dist(this.player.pos, this.finalStartPlayerPos) >= core.radius * 1.1
     );
   }
 
+  private finalMinimumArea() {
+    const core = this.hostCore;
+
+    return core ? Math.max(core.radius * core.radius * 1.85, 6.4) : 6.4;
+  }
+
+  private finalMinimumRouteLength() {
+    return this.hostCore ? this.hostCore.radius * 2.7 : 5.2;
+  }
+
   private isTutorialTarget(index: number) {
-    return Math.abs(index - TUTORIAL_TARGET_INDEX) <= 1;
+    return (
+      index >= TUTORIAL_GATE_START_INDEX && index < TUTORIAL_GATE_END_INDEX
+    );
   }
 
   private isCompleteTutorialCapture(capturedIds: number[]) {
@@ -961,16 +1025,7 @@ export class GameEngine {
       return false;
     }
 
-    const a = this.chain[TUTORIAL_TARGET_INDEX];
-    const b = this.chain[TUTORIAL_TARGET_INDEX + 1];
-
-    if (!a || !b) {
-      return false;
-    }
-
-    const crossed =
-      crossedSegment(this.player.prev, this.player.pos, a.pos, b.pos, 1.05) ??
-      this.tutorialNearCrossing(a.pos, b.pos);
+    const crossed = this.tutorialGateCrossing();
 
     if (!crossed) {
       return false;
@@ -1011,31 +1066,28 @@ export class GameEngine {
       return false;
     }
 
-    const a = this.chain[TUTORIAL_TARGET_INDEX];
-    const b = this.chain[TUTORIAL_TARGET_INDEX + 1];
+    const crossing = this.tutorialGatePreviewPoint();
 
-    if (!a || !b) {
+    if (!crossing) {
       this.candidate = null;
       return true;
     }
 
-    const point = closestPointOnSegment(this.player.pos, a.pos, b.pos);
-
     if (
       (this.tutorialRouteProgress & 3) !== 3 ||
-      dist(this.player.pos, point) > 2.25
+      dist(this.player.pos, crossing.point) > 2.45
     ) {
       this.candidate = null;
       return true;
     }
 
-    const polygon = this.tutorialPolygon(point);
+    const polygon = this.tutorialPolygon(crossing.point);
     const cellIds = this.cells
       .filter((cell) => pointInPolygon(cell.pos, polygon))
       .map((cell) => cell.id);
     this.candidate = {
-      targetIndex: TUTORIAL_TARGET_INDEX,
-      point,
+      targetIndex: crossing.index,
+      point: crossing.point,
       polygon,
       center: polygonCentroid(polygon),
       area: polygonArea(polygon),
@@ -1043,6 +1095,7 @@ export class GameEngine {
       previewCount: cellIds.length,
       includesCore: false,
       canBindCore: false,
+      nearBindCore: false,
       tutorial: true,
       pulse: (this.candidate?.pulse ?? 0) + delta * 5,
     };
@@ -1053,25 +1106,76 @@ export class GameEngine {
   private tutorialPolygon(crossing: Vec2) {
     return [
       crossing,
-      { x: 18.25, y: 19.28 },
-      { x: 18.35, y: 20.82 },
-      { x: 16.95, y: 21.36 },
-      { x: 15.4, y: 20.56 },
-      { x: 15.26, y: 19.16 },
+      { x: 18.55, y: 19.05 },
+      { x: 18.46, y: 21.06 },
+      { x: 16.9, y: 21.58 },
+      { x: 15.22, y: 20.76 },
+      { x: 15.1, y: 19.0 },
     ];
   }
 
   private tutorialNearCrossing(a: Vec2, b: Vec2) {
     const point = closestPointOnSegment(this.player.pos, a, b);
 
-    if (dist(this.player.pos, point) > 2.25 || this.player.pos.y > 19.95) {
+    if (dist(this.player.pos, point) > 2.45 || this.player.pos.y > 19.98) {
       return null;
     }
 
     return point;
   }
 
-  private updateFinalCoreRoute() {
+  private tutorialGateCrossing() {
+    for (
+      let index = TUTORIAL_GATE_START_INDEX;
+      index < TUTORIAL_GATE_END_INDEX;
+      index += 1
+    ) {
+      const a = this.chain[index];
+      const b = this.chain[index + 1];
+
+      if (!a || !b) {
+        continue;
+      }
+
+      const crossed =
+        crossedSegment(this.player.prev, this.player.pos, a.pos, b.pos, 1.2) ??
+        this.tutorialNearCrossing(a.pos, b.pos);
+
+      if (crossed) {
+        return crossed;
+      }
+    }
+
+    return null;
+  }
+
+  private tutorialGatePreviewPoint() {
+    let best: { index: number; point: Vec2; distance: number } | null = null;
+
+    for (
+      let index = TUTORIAL_GATE_START_INDEX;
+      index < TUTORIAL_GATE_END_INDEX;
+      index += 1
+    ) {
+      const a = this.chain[index];
+      const b = this.chain[index + 1];
+
+      if (!a || !b) {
+        continue;
+      }
+
+      const point = closestPointOnSegment(this.player.pos, a.pos, b.pos);
+      const distance = dist(this.player.pos, point);
+
+      if (!best || distance < best.distance) {
+        best = { index, point, distance };
+      }
+    }
+
+    return best;
+  }
+
+  private updateFinalCoreRoute(delta: number) {
     if (
       this.phase !== "observer" ||
       this.hostCore?.state !== "dormant" ||
@@ -1079,6 +1183,8 @@ export class GameEngine {
     ) {
       return;
     }
+
+    const previousAngularTravel = this.finalCoreAngularTravel;
 
     this.finalCoreRouteLength += dist(
       this.player.pos,
@@ -1097,6 +1203,7 @@ export class GameEngine {
       distance > this.hostCore.radius * 3.9
     ) {
       this.finalCoreLastAngle = null;
+      this.finalCoreStalledSeconds += delta;
       return;
     }
 
@@ -1118,6 +1225,12 @@ export class GameEngine {
     }
 
     this.finalCoreLastAngle = angle;
+
+    if (this.finalCoreAngularTravel > previousAngularTravel + 0.004) {
+      this.finalCoreStalledSeconds = 0;
+    } else {
+      this.finalCoreStalledSeconds += delta;
+    }
   }
 
   private updateReveal(now: number) {
@@ -1307,6 +1420,11 @@ export class GameEngine {
     });
 
     if (!candidate) {
+      if (this.phase === "observer") {
+        this.candidate = this.finalGuideCandidate(delta);
+        return;
+      }
+
       this.candidate = null;
       return;
     }
@@ -1321,11 +1439,17 @@ export class GameEngine {
       return;
     }
 
-    if (
+    const nearBindCore =
       this.phase === "observer" &&
-      (!includesCore || !this.hasFinalRouteProgress(candidate.area))
-    ) {
-      this.candidate = null;
+      includesCore &&
+      this.isNearFinalCoreCandidate(candidate);
+    const canBindCore =
+      this.phase === "observer" &&
+      includesCore &&
+      this.isValidFinalCoreKnot(candidate);
+
+    if (this.phase === "observer" && (!includesCore || !nearBindCore)) {
+      this.candidate = this.finalGuideCandidate(delta);
       return;
     }
 
@@ -1338,17 +1462,151 @@ export class GameEngine {
       cellIds,
       previewCount: cellIds.length + (includesCore ? 1 : 0),
       includesCore,
-      canBindCore:
-        this.phase === "observer" &&
-        includesCore &&
-        this.isValidFinalCoreKnot(candidate),
+      canBindCore,
+      nearBindCore: nearBindCore && !canBindCore,
       tutorial: this.tutorialActive,
       pulse: (this.candidate?.pulse ?? 0) + delta * 5,
     };
+    this.finalGuideTargetIndex = candidate.crossedIndex;
 
     if (this.simulationStep % 18 === 0) {
       this.audio.tone("tension");
     }
+  }
+
+  private finalGuideCandidate(delta: number): KnotCandidate | null {
+    if (
+      this.phase !== "observer" ||
+      this.hostCore?.state !== "dormant" ||
+      this.observerIntroElapsed < FINAL_ONBOARDING_SECONDS ||
+      this.finalCoreAngularTravel < FINAL_ROUTE_ANGLE_REQUIRED * 0.62 ||
+      this.finalCoreRouteLength < this.finalMinimumRouteLength() * 0.58
+    ) {
+      return null;
+    }
+
+    let best: SelfKnot | null = null;
+    let bestScore = Number.NEGATIVE_INFINITY;
+
+    for (let index = 2; index < this.chain.length - 1; index += 1) {
+      const a = this.chain[index];
+      const b = this.chain[index + 1];
+
+      if (!a || !b) {
+        continue;
+      }
+
+      const point = closestPointOnSegment(this.player.pos, a.pos, b.pos);
+      const distance = dist(this.player.pos, point);
+
+      if (distance > this.hostCore.radius * 2.55) {
+        continue;
+      }
+
+      const polygon = this.finalPreviewPolygon(index, point);
+      const guide: SelfKnot = {
+        polygon,
+        area: polygonArea(polygon),
+        center: polygonCentroid(polygon),
+        intersection: point,
+        crossedIndex: index,
+        span: index,
+      };
+
+      if (!this.isPlausibleFinalGuideCandidate(guide, distance)) {
+        continue;
+      }
+
+      const preferred =
+        this.finalGuideTargetIndex != null
+          ? Math.max(0, 1 - Math.abs(index - this.finalGuideTargetIndex) / 4)
+          : 0;
+      const score =
+        preferred * 2.4 +
+        guide.area * 0.04 -
+        distance * 0.9 -
+        Math.abs(dist(point, this.hostCore.pos) - this.hostCore.radius * 2.35) *
+          0.28;
+
+      if (score > bestScore) {
+        bestScore = score;
+        best = guide;
+      }
+    }
+
+    if (!best) {
+      return null;
+    }
+
+    this.finalGuideTargetIndex = best.crossedIndex;
+    const includesCore = this.coreInsidePolygon(best.polygon);
+
+    return {
+      targetIndex: best.crossedIndex,
+      point: best.intersection,
+      polygon: best.polygon,
+      center: best.center,
+      area: best.area,
+      cellIds: [],
+      previewCount: includesCore ? 1 : 0,
+      includesCore,
+      canBindCore: false,
+      nearBindCore: true,
+      tutorial: false,
+      pulse: (this.candidate?.pulse ?? 0) + delta * 5,
+    };
+  }
+
+  private finalPreviewPolygon(crossedIndex: number, crossing: Vec2) {
+    const polygon: Vec2[] = [{ ...crossing }];
+
+    for (let index = crossedIndex; index >= 0; index -= 1) {
+      const link = this.chain[index];
+
+      if (link) {
+        polygon.push({ ...link.pos });
+      }
+    }
+
+    return simplifyPath(polygon, 0.08);
+  }
+
+  private isPlausibleFinalGuideCandidate(selfKnot: SelfKnot, distance: number) {
+    const core = this.hostCore;
+
+    if (
+      !core ||
+      this.observerIntroElapsed < FINAL_ONBOARDING_SECONDS ||
+      selfKnot.span < MIN_KNOT_SPAN
+    ) {
+      return false;
+    }
+
+    const initialChainDistance = this.nearestFinalStartChainDistance(
+      selfKnot.intersection,
+    );
+    const crossingDistance = dist(selfKnot.intersection, core.pos);
+    const angularEnough =
+      this.finalCoreAngularTravel >= FINAL_ROUTE_ANGLE_REQUIRED * 0.66;
+    const lengthEnough =
+      this.finalCoreRouteLength >= this.finalMinimumRouteLength() * 0.58;
+    const areaEnough = selfKnot.area >= this.finalMinimumArea() * 0.46;
+    const movedEnough =
+      dist(this.player.pos, this.finalStartPlayerPos) >= core.radius * 0.78;
+    const noObviousShortcut =
+      initialChainDistance >= 0.18 ||
+      this.finalCoreRouteLength >= core.radius * 2.45;
+
+    return (
+      angularEnough &&
+      lengthEnough &&
+      areaEnough &&
+      movedEnough &&
+      noObviousShortcut &&
+      distance <= core.radius * 3.15 &&
+      crossingDistance >= core.radius * 0.72 &&
+      crossingDistance <= core.radius * 5.55
+    );
   }
 
   private updateKnotCapture(delta: number) {
@@ -1970,6 +2228,8 @@ export class GameEngine {
     this.finalCoreRouteLength = 0;
     this.finalCoreLastAngle = null;
     this.finalCoreLastPlayerPos = { ...this.player.pos };
+    this.finalCoreStalledSeconds = 0;
+    this.finalGuideTargetIndex = null;
     this.finalStartPlayerPos = { ...this.player.pos };
     this.finalStartChain = this.chain.map((link) => ({ ...link.pos }));
     const corePos = this.chooseHostCorePosition();
@@ -1988,7 +2248,7 @@ export class GameEngine {
     store.setPhase("observer");
     store.setSettingsVisible(false);
     store.setCaption("");
-    store.setClock("00:20");
+    store.setClock("00:24");
     store.setPrompt(strings.prompts.finalA);
   }
 
@@ -2336,6 +2596,63 @@ export class GameEngine {
     };
   }
 
+  private currentCoreRouteFeedback(): CoreRouteFeedback {
+    const candidate = this.candidate;
+    const active =
+      this.phase === "observer" &&
+      this.hostCore?.state === "dormant" &&
+      this.observerIntroElapsed >= FINAL_ONBOARDING_SECONDS;
+
+    if (!active) {
+      return {
+        active: false,
+        progress: 0,
+        angularProgress: 0,
+        routeLengthProgress: 0,
+        enclosesCore: false,
+        nearValid: false,
+        canBind: false,
+        targetIndex: null,
+        point: null,
+        polygon: [],
+        stalledSeconds: 0,
+      };
+    }
+
+    const angularProgress = clamp(
+      this.finalCoreAngularTravel / FINAL_ROUTE_ANGLE_REQUIRED,
+      0,
+      1,
+    );
+    const routeLengthProgress = clamp(
+      this.finalCoreRouteLength / this.finalMinimumRouteLength(),
+      0,
+      1,
+    );
+    const includesCore = Boolean(candidate?.includesCore);
+    const nearValid = Boolean(candidate?.nearBindCore);
+    const canBind = Boolean(candidate?.canBindCore);
+
+    return {
+      active,
+      progress: clamp(
+        angularProgress * 0.78 + routeLengthProgress * 0.22,
+        0,
+        1,
+      ),
+      angularProgress,
+      routeLengthProgress,
+      enclosesCore: includesCore,
+      nearValid,
+      canBind,
+      targetIndex:
+        nearValid || canBind ? (candidate?.targetIndex ?? null) : null,
+      point: nearValid || canBind ? (candidate?.point ?? null) : null,
+      polygon: nearValid || canBind ? (candidate?.polygon ?? []) : [],
+      stalledSeconds: this.finalCoreStalledSeconds,
+    };
+  }
+
   private render(now: number) {
     const settings = useGameUiStore.getState().settings;
     this.renderer.render({
@@ -2351,6 +2668,7 @@ export class GameEngine {
       hostCore: this.hostCore,
       knot: this.knot,
       candidate: this.candidate,
+      coreRoute: this.currentCoreRouteFeedback(),
       focus: this.currentFocusState(),
       chainWave: this.chainWave,
       observerAttacks: this.observerAttacks,

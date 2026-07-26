@@ -106,8 +106,23 @@ export type KnotCandidate = {
   previewCount: number;
   includesCore: boolean;
   canBindCore: boolean;
+  nearBindCore: boolean;
   tutorial: boolean;
   pulse: number;
+};
+
+export type CoreRouteFeedback = {
+  active: boolean;
+  progress: number;
+  angularProgress: number;
+  routeLengthProgress: number;
+  enclosesCore: boolean;
+  nearValid: boolean;
+  canBind: boolean;
+  targetIndex: number | null;
+  point: Vec2 | null;
+  polygon: Vec2[];
+  stalledSeconds: number;
 };
 
 export type Player = {

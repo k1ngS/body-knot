@@ -3,6 +3,7 @@ import { WORLD_SIZE } from "../core/constants";
 import type {
   Cell,
   ChainLink,
+  CoreRouteFeedback,
   Cutter,
   FocusState,
   HostCore,
@@ -28,6 +29,7 @@ export type RenderSnapshot = {
   hostCore: HostCore | null;
   knot: KnotState;
   candidate: KnotCandidate | null;
+  coreRoute: CoreRouteFeedback;
   focus: FocusState;
   chainWave: number;
   observerAttacks: ObserverAttack[];
@@ -119,6 +121,7 @@ export class CanvasRenderer {
     this.drawGhost(snapshot);
     this.drawTutorialTarget(snapshot);
     this.drawHostCore(snapshot);
+    this.drawCoreRouteProgress(snapshot);
     this.drawCells(
       snapshot.cells,
       snapshot.time,
@@ -126,6 +129,7 @@ export class CanvasRenderer {
       new Set(snapshot.candidate?.cellIds ?? []),
       new Set(snapshot.focus.influencedIds),
       snapshot.focus.world,
+      snapshot.hostCore,
     );
     this.drawCutterTelegraph(snapshot);
     this.drawKnot(snapshot);
@@ -275,35 +279,80 @@ export class CanvasRenderer {
       return;
     }
 
-    const a = snapshot.chain[snapshot.tutorialTargetIndex];
-    const b = snapshot.chain[snapshot.tutorialTargetIndex + 1];
+    const gateLinks = snapshot.chain.slice(
+      Math.max(0, snapshot.tutorialTargetIndex - 1),
+      snapshot.tutorialTargetIndex + 3,
+    );
 
-    if (!a || !b) {
+    if (gateLinks.length < 2) {
       return;
     }
 
     const { context } = this;
-    const start = this.worldToScreen(a.pos);
-    const end = this.worldToScreen(b.pos);
+    const screens = gateLinks.map((link) => this.worldToScreen(link.pos));
+    const center = screens.reduce(
+      (sum, point) => ({ x: sum.x + point.x, y: sum.y + point.y }),
+      { x: 0, y: 0 },
+    );
+    center.x /= screens.length;
+    center.y /= screens.length;
     const pulse = snapshot.reducedMotion
       ? 0.7
-      : 0.62 + Math.sin(snapshot.time * 7.5) * 0.28;
+      : 0.62 + Math.sin(snapshot.time * 6.2) * 0.28;
     context.save();
     context.lineCap = "round";
+    context.lineJoin = "round";
+    context.globalAlpha = 0.42 + pulse * 0.18;
+    context.strokeStyle = snapshot.highContrast ? "#ffffff" : "#9cf2ff";
+    context.lineWidth = 26;
+    context.beginPath();
+    for (const [index, point] of screens.entries()) {
+      if (index === 0) {
+        context.moveTo(point.x, point.y);
+      } else {
+        context.lineTo(point.x, point.y);
+      }
+    }
+    context.stroke();
+    context.globalAlpha = 0.82 + pulse * 0.16;
     context.strokeStyle = snapshot.highContrast
-      ? `rgba(255,255,255,${0.7 + pulse * 0.2})`
-      : `rgba(156,242,255,${0.68 + pulse * 0.26})`;
-    context.lineWidth = 10;
+      ? "#ffffff"
+      : `rgba(234,255,255,${0.82 + pulse * 0.16})`;
+    context.lineWidth = 8;
     context.beginPath();
-    context.moveTo(start.x, start.y);
-    context.lineTo(end.x, end.y);
+    for (const [index, point] of screens.entries()) {
+      if (index === 0) {
+        context.moveTo(point.x, point.y);
+      } else {
+        context.lineTo(point.x, point.y);
+      }
+    }
     context.stroke();
-    context.strokeStyle = "#eaffff";
-    context.lineWidth = 2;
-    context.beginPath();
-    context.moveTo(start.x, start.y);
-    context.lineTo(end.x, end.y);
-    context.stroke();
+    if (!snapshot.reducedMotion) {
+      const amount = (snapshot.time * 2.2) % 1;
+      const start = screens[Math.max(0, screens.length - 2)];
+      const end = screens[screens.length - 1];
+
+      if (start && end) {
+        const bead = {
+          x: start.x + (end.x - start.x) * amount,
+          y: start.y + (end.y - start.y) * amount,
+        };
+        context.fillStyle = "#eaffff";
+        context.beginPath();
+        context.arc(bead.x, bead.y, 5 + pulse * 2, 0, Math.PI * 2);
+        context.fill();
+      }
+    }
+    context.globalAlpha = 1;
+    context.font = "900 13px Arial, Helvetica, sans-serif";
+    context.textAlign = "center";
+    context.textBaseline = "middle";
+    context.fillStyle = "#eaffff";
+    context.strokeStyle = "#020304";
+    context.lineWidth = 5;
+    context.strokeText(strings.prompts.crossHere, center.x + 4, center.y - 42);
+    context.fillText(strings.prompts.crossHere, center.x + 4, center.y - 42);
     context.restore();
   }
 
@@ -345,10 +394,10 @@ export class CanvasRenderer {
       context.save();
       context.globalAlpha = onboarding
         ? 0.52 + pulse * 0.24
-        : 0.28 + pulse * 0.14;
+        : 0.42 + pulse * 0.18;
       context.strokeStyle = "#c8ffff";
-      context.lineWidth = onboarding ? 2.3 : 1.4;
-      context.setLineDash(onboarding ? [14, 8] : [10, 11]);
+      context.lineWidth = onboarding ? 2.3 : 1.9;
+      context.setLineDash(onboarding ? [14, 8] : [12, 10]);
       context.beginPath();
       context.ellipse(
         0,
@@ -411,7 +460,12 @@ export class CanvasRenderer {
       context.setLineDash([]);
     }
 
-    if (onboarding) {
+    if (
+      onboarding ||
+      (snapshot.phase === "observer" &&
+        core.state === "dormant" &&
+        snapshot.coreRoute.stalledSeconds >= 3)
+    ) {
       context.globalAlpha = 1;
       context.font = "900 13px Arial, Helvetica, sans-serif";
       context.textAlign = "center";
@@ -419,8 +473,67 @@ export class CanvasRenderer {
       context.fillStyle = "#eaffff";
       context.strokeStyle = "#020304";
       context.lineWidth = 5;
-      context.strokeText("HOST CORE", 0, -radius * 1.72);
-      context.fillText("HOST CORE", 0, -radius * 1.72);
+      context.strokeText(strings.hostCore, 0, -radius * 1.72);
+      context.fillText(strings.hostCore, 0, -radius * 1.72);
+    }
+
+    context.restore();
+  }
+
+  private drawCoreRouteProgress(snapshot: RenderSnapshot) {
+    const core = snapshot.hostCore;
+    const route = snapshot.coreRoute;
+
+    if (!core || !route.active || snapshot.phase !== "observer") {
+      return;
+    }
+
+    const { context } = this;
+    const screen = this.worldToScreen(core.pos);
+    const pulse = snapshot.reducedMotion
+      ? 0
+      : Math.sin(snapshot.time * 5.4 + core.pulse) * 0.5 + 0.5;
+    const radius = core.radius * this.scale * 2.28;
+    const startAngle = -Math.PI / 2;
+    const endAngle = startAngle + Math.PI * 2 * route.progress;
+
+    context.save();
+    context.translate(screen.x, screen.y);
+    context.lineCap = "round";
+    context.globalAlpha = 0.22;
+    context.strokeStyle = snapshot.highContrast ? "#ffffff" : "#5a1a21";
+    context.lineWidth = 5;
+    context.beginPath();
+    context.arc(0, 0, radius, 0, Math.PI * 2);
+    context.stroke();
+
+    context.globalAlpha = route.canBind
+      ? 0.96
+      : route.nearValid
+        ? 0.78 + pulse * 0.14
+        : 0.46 + pulse * 0.1;
+    context.strokeStyle = snapshot.highContrast
+      ? "#ffffff"
+      : route.canBind
+        ? "#ffe6e8"
+        : route.nearValid
+          ? "#ff9aa3"
+          : "#c8ffff";
+    context.lineWidth = route.canBind ? 7 : route.nearValid ? 6 : 4;
+    context.beginPath();
+    context.arc(0, 0, radius, startAngle, endAngle);
+    context.stroke();
+
+    if (route.nearValid || route.canBind) {
+      const tip = {
+        x: Math.cos(endAngle) * radius,
+        y: Math.sin(endAngle) * radius,
+      };
+      context.fillStyle = route.canBind ? "#ffe6e8" : "#ffbac0";
+      context.globalAlpha = 0.9;
+      context.beginPath();
+      context.arc(tip.x, tip.y, 4.5 + pulse * 1.6, 0, Math.PI * 2);
+      context.fill();
     }
 
     context.restore();
@@ -433,6 +546,7 @@ export class CanvasRenderer {
     candidateCellIds: Set<number>,
     focusCellIds: Set<number>,
     focusWorld: Vec2,
+    hostCore: HostCore | null,
   ) {
     const { context } = this;
 
@@ -448,7 +562,11 @@ export class CanvasRenderer {
       const isFocused = focusCellIds.has(cell.id);
 
       if (red && !isCandidate && !isFocused && !cell.highlighted) {
-        context.globalAlpha = 0.44;
+        const nearCore =
+          hostCore != null &&
+          Math.hypot(cell.pos.x - hostCore.pos.x, cell.pos.y - hostCore.pos.y) <
+            hostCore.radius * 4.2;
+        context.globalAlpha = nearCore ? 0.22 : 0.44;
       }
 
       if (isFocused) {
@@ -625,8 +743,12 @@ export class CanvasRenderer {
       ? 0.7
       : 0.62 + Math.sin(candidate.pulse * 2.2) * 0.24;
     const coreCandidate =
-      snapshot.phase === "observer" && candidate.includesCore;
+      snapshot.phase === "observer" &&
+      (candidate.includesCore ||
+        candidate.canBindCore ||
+        candidate.nearBindCore);
     const canBindCore = coreCandidate && candidate.canBindCore;
+    const nearBindCore = coreCandidate && candidate.nearBindCore;
     context.save();
     context.lineCap = "round";
     context.lineJoin = "round";
@@ -658,7 +780,9 @@ export class CanvasRenderer {
       }
 
       context.closePath();
-      context.fill();
+      if (!coreCandidate || canBindCore) {
+        context.fill();
+      }
       context.globalAlpha = coreCandidate ? 0.56 : valid ? 0.42 : 0.18;
       context.strokeStyle = valid
         ? candidate.includesCore
@@ -668,7 +792,25 @@ export class CanvasRenderer {
           : "#c8ffff"
         : "#6f7877";
       context.lineWidth = coreCandidate ? 2.9 : valid ? 2.2 : 1.2;
+      context.setLineDash(nearBindCore ? [12, 8] : []);
       context.stroke();
+      context.setLineDash([]);
+
+      if (nearBindCore && candidate.polygon.length > 3) {
+        context.globalAlpha = 0.36 + pulse * 0.1;
+        context.strokeStyle = "#ff9aa3";
+        context.lineWidth = 2.1;
+        context.setLineDash([5, 8]);
+        context.beginPath();
+        const head = this.worldToScreen(snapshot.player.pos);
+        context.moveTo(head.x, head.y);
+        for (const point of candidate.polygon.slice(1, 4)) {
+          const screen = this.worldToScreen(point);
+          context.lineTo(screen.x, screen.y);
+        }
+        context.stroke();
+        context.setLineDash([]);
+      }
     }
 
     context.globalAlpha = 1;
@@ -685,7 +827,9 @@ export class CanvasRenderer {
     context.lineWidth = coreCandidate
       ? canBindCore
         ? 14
-        : 11
+        : nearBindCore
+          ? 13
+          : 11
       : candidate.previewCount > 0
         ? 10
         : 5;
@@ -706,14 +850,18 @@ export class CanvasRenderer {
     context.lineWidth = coreCandidate
       ? canBindCore
         ? 4
-        : 3.2
+        : nearBindCore
+          ? 3.8
+          : 3.2
       : candidate.previewCount > 0
         ? 3
         : 1.6;
     const marker = coreCandidate
       ? canBindCore
         ? 20 + pulse * 7
-        : 16 + pulse * 5
+        : nearBindCore
+          ? 19 + pulse * 6
+          : 16 + pulse * 5
       : candidate.previewCount > 0
         ? 13 + pulse * 6
         : 9 + pulse * 2;
@@ -727,7 +875,7 @@ export class CanvasRenderer {
     context.arc(0, 0, marker * 1.35, -Math.PI * 0.25, Math.PI * 1.15);
     context.stroke();
 
-    if (candidate.previewCount > 0) {
+    if (candidate.previewCount > 0 || coreCandidate) {
       context.rotate(-candidate.pulse * 0.35);
       context.font = "900 18px Arial, Helvetica, sans-serif";
       context.textAlign = "center";
@@ -735,9 +883,11 @@ export class CanvasRenderer {
       context.fillStyle = "#eaffff";
       context.strokeStyle = "#020304";
       context.lineWidth = 5;
-      const text = `x${candidate.previewCount}`;
-      context.strokeText(text, 0, -marker * 2.9);
-      context.fillText(text, 0, -marker * 2.9);
+      if (!coreCandidate && candidate.previewCount > 0) {
+        const text = `x${candidate.previewCount}`;
+        context.strokeText(text, 0, -marker * 2.9);
+        context.fillText(text, 0, -marker * 2.9);
+      }
 
       if (canBindCore) {
         context.font = "900 13px Arial, Helvetica, sans-serif";
@@ -746,6 +896,13 @@ export class CanvasRenderer {
         context.lineWidth = 4;
         context.strokeText(strings.prompts.crossNow, 0, marker * 2.35);
         context.fillText(strings.prompts.crossNow, 0, marker * 2.35);
+      } else if (nearBindCore) {
+        context.font = "900 13px Arial, Helvetica, sans-serif";
+        context.fillStyle = "#ffbac0";
+        context.strokeStyle = "#020304";
+        context.lineWidth = 4;
+        context.strokeText(strings.prompts.crossHere, 0, marker * 2.35);
+        context.fillText(strings.prompts.crossHere, 0, marker * 2.35);
       }
     }
 

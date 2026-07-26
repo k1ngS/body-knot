@@ -17,8 +17,10 @@ export const strings = {
     finalB: "MOVE. LET IT LOCK.",
     finalC: "BIND THE CORE.",
     finalMove: "MOVE. CIRCLE. CROSS.",
+    crossHere: "CROSS HERE",
     crossNow: "CROSS NOW",
   },
+  hostCore: "HOST CORE",
   revealLines: [
     "I SEE THE HAND THAT GATHERS THEM.",
     "IT MOVES WHEN YOU MOVE.",
