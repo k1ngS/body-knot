@@ -113,20 +113,21 @@ export function BodyKnotShell() {
 
       {phase === "menu" && (
         <section className="absolute inset-0 grid place-items-center bg-[radial-gradient(circle_at_50%_52%,transparent_0_18%,rgba(5,6,7,0.76)_58%,#020304_100%)]">
+          <div className="pointer-events-none absolute left-1/2 top-1/2 h-[min(44rem,74vh)] w-[min(62rem,94vw)] -translate-x-1/2 -translate-y-1/2 bg-[radial-gradient(ellipse_at_center,rgba(2,3,4,0.9)_0%,rgba(2,3,4,0.72)_42%,rgba(2,3,4,0)_73%)]" />
           <span className="absolute left-5 top-5 font-mono text-[0.58rem] uppercase tracking-[0.2em] text-[#4e5660]">
             {strings.eyebrow}
           </span>
           <span className="absolute bottom-5 right-5 font-mono text-[0.58rem] uppercase tracking-[0.2em] text-[#4e5660]">
             POINTER STATUS: UNSEEN
           </span>
-          <div className="w-[min(560px,90vw)] px-7 text-center">
-            <div className="text-[0.62rem] font-black uppercase tracking-[0.28em] text-[#646b73]">
+          <div className="relative z-10 w-[min(590px,90vw)] px-7 text-center">
+            <div className="text-[0.62rem] font-black uppercase tracking-[0.28em] text-[#737b82]">
               A 32x32 biological interface
             </div>
-            <h1 className="my-3 text-[clamp(2.25rem,9vw,6.5rem)] font-black leading-[0.82] tracking-[0.04em] sm:tracking-[0.07em]">
+            <h1 className="my-3 text-[clamp(2.35rem,8.2vw,6.2rem)] font-black leading-[0.82] tracking-[0.04em] drop-shadow-[0_0_24px_#020304] sm:tracking-[0.07em]">
               BODY<span className="text-[#78727f]">{"//"}</span>KNOT
             </h1>
-            <p className="mx-auto mb-7 max-w-[430px] text-sm leading-7 text-[#858b92]">
+            <p className="mx-auto mb-7 max-w-[450px] text-sm leading-7 text-[#9aa1a7]">
               {strings.menuTag}
             </p>
             <div className="mx-auto grid w-[min(290px,100%)]">
@@ -278,7 +279,7 @@ export function BodyKnotShell() {
         </div>
       )}
 
-      {phase !== "playing" && phase !== "observer" && (
+      {phase !== "playing" && phase !== "observer" && phase !== "menu" && (
         <button
           ref={settingsButtonRef}
           className="absolute right-4 top-16 z-20 border border-[#2a3035] bg-[#050708aa] px-3 py-2 text-[0.6rem] font-black uppercase tracking-[0.16em] text-[#929aa0] backdrop-blur hover:text-white"

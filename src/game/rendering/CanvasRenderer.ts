@@ -1,3 +1,4 @@
+import { strings } from "../../i18n/strings";
 import { WORLD_SIZE } from "../core/constants";
 import type {
   Cell,
@@ -316,6 +317,10 @@ export class CanvasRenderer {
     const { context } = this;
     const screen = this.worldToScreen(core.pos);
     const bind = core.state === "binding" ? core.bindProgress : 0;
+    const candidateContainsCore =
+      snapshot.phase === "observer" && snapshot.candidate?.includesCore;
+    const candidateCanBind =
+      snapshot.phase === "observer" && snapshot.candidate?.canBindCore;
     const pulse = snapshot.reducedMotion
       ? 0.2
       : 0.5 + Math.sin(snapshot.time * 5 + core.pulse) * 0.5;
@@ -394,6 +399,17 @@ export class CanvasRenderer {
     context.arc(0, 0, radius * 0.18, 0, Math.PI * 2);
     context.fillStyle = "#eaffff";
     context.fill();
+
+    if (candidateContainsCore) {
+      context.globalAlpha = candidateCanBind ? 0.82 : 0.42;
+      context.strokeStyle = candidateCanBind ? "#fff4f4" : "#ff9aa3";
+      context.lineWidth = candidateCanBind ? 2.6 : 1.6;
+      context.setLineDash(candidateCanBind ? [] : [8, 8]);
+      context.beginPath();
+      context.arc(0, 0, radius * 1.38, 0, Math.PI * 2);
+      context.stroke();
+      context.setLineDash([]);
+    }
 
     if (onboarding) {
       context.globalAlpha = 1;
@@ -608,13 +624,20 @@ export class CanvasRenderer {
     const pulse = snapshot.reducedMotion
       ? 0.7
       : 0.62 + Math.sin(candidate.pulse * 2.2) * 0.24;
+    const coreCandidate =
+      snapshot.phase === "observer" && candidate.includesCore;
+    const canBindCore = coreCandidate && candidate.canBindCore;
     context.save();
     context.lineCap = "round";
     context.lineJoin = "round";
 
     if (candidate.polygon.length > 2) {
       const valid = candidate.previewCount > 0;
-      context.globalAlpha = valid ? 0.14 + pulse * 0.06 : 0.045;
+      context.globalAlpha = coreCandidate
+        ? 0.2 + pulse * 0.08
+        : valid
+          ? 0.14 + pulse * 0.06
+          : 0.045;
       context.fillStyle = valid
         ? snapshot.highContrast
           ? "#ffffff"
@@ -636,13 +659,15 @@ export class CanvasRenderer {
 
       context.closePath();
       context.fill();
-      context.globalAlpha = valid ? 0.42 : 0.18;
+      context.globalAlpha = coreCandidate ? 0.56 : valid ? 0.42 : 0.18;
       context.strokeStyle = valid
         ? candidate.includesCore
-          ? "#ff6570"
+          ? canBindCore
+            ? "#ffe6e8"
+            : "#ff6570"
           : "#c8ffff"
         : "#6f7877";
-      context.lineWidth = valid ? 2.2 : 1.2;
+      context.lineWidth = coreCandidate ? 2.9 : valid ? 2.2 : 1.2;
       context.stroke();
     }
 
@@ -653,9 +678,17 @@ export class CanvasRenderer {
       candidate.previewCount > 0
         ? snapshot.highContrast
           ? `rgba(255, 255, 255, ${0.78 + pulse * 0.18})`
-          : `rgba(176, 255, 255, ${0.72 + pulse * 0.24})`
+          : coreCandidate
+            ? `rgba(255, 220, 224, ${0.84 + pulse * 0.16})`
+            : `rgba(176, 255, 255, ${0.72 + pulse * 0.24})`
         : `rgba(135, 151, 151, ${0.34 + pulse * 0.16})`;
-    context.lineWidth = candidate.previewCount > 0 ? 10 : 5;
+    context.lineWidth = coreCandidate
+      ? canBindCore
+        ? 14
+        : 11
+      : candidate.previewCount > 0
+        ? 10
+        : 5;
     context.beginPath();
     context.moveTo(start.x, start.y);
     context.lineTo(end.x, end.y);
@@ -664,9 +697,26 @@ export class CanvasRenderer {
     const point = this.worldToScreen(candidate.point);
     context.translate(point.x, point.y);
     context.rotate(candidate.pulse * 0.35);
-    context.strokeStyle = candidate.previewCount > 0 ? "#eaffff" : "#7f9090";
-    context.lineWidth = candidate.previewCount > 0 ? 3 : 1.6;
-    const marker = candidate.previewCount > 0 ? 13 + pulse * 6 : 9 + pulse * 2;
+    context.strokeStyle =
+      candidate.previewCount > 0
+        ? coreCandidate
+          ? "#fff4f4"
+          : "#eaffff"
+        : "#7f9090";
+    context.lineWidth = coreCandidate
+      ? canBindCore
+        ? 4
+        : 3.2
+      : candidate.previewCount > 0
+        ? 3
+        : 1.6;
+    const marker = coreCandidate
+      ? canBindCore
+        ? 20 + pulse * 7
+        : 16 + pulse * 5
+      : candidate.previewCount > 0
+        ? 13 + pulse * 6
+        : 9 + pulse * 2;
     context.beginPath();
     context.moveTo(-marker, -marker);
     context.lineTo(marker, marker);
@@ -688,6 +738,15 @@ export class CanvasRenderer {
       const text = `x${candidate.previewCount}`;
       context.strokeText(text, 0, -marker * 2.9);
       context.fillText(text, 0, -marker * 2.9);
+
+      if (canBindCore) {
+        context.font = "900 13px Arial, Helvetica, sans-serif";
+        context.fillStyle = "#ffd4d8";
+        context.strokeStyle = "#020304";
+        context.lineWidth = 4;
+        context.strokeText(strings.prompts.crossNow, 0, marker * 2.35);
+        context.fillText(strings.prompts.crossNow, 0, marker * 2.35);
+      }
     }
 
     context.restore();
@@ -759,25 +818,80 @@ export class CanvasRenderer {
     const targetPoint = this.worldToScreen(target.point);
     const pulse = snapshot.reducedMotion
       ? 0.7
-      : 0.45 + Math.sin(snapshot.time * 12) * 0.25;
+      : 0.48 + Math.sin(snapshot.time * 5.2) * 0.24;
     const charge = clamp(snapshot.cutter.telegraph / 1.12, 0, 1);
+    const segmentMid = {
+      x: (start.x + end.x) * 0.5,
+      y: (start.y + end.y) * 0.5,
+    };
+    const segmentLength = Math.max(
+      1,
+      Math.hypot(end.x - start.x, end.y - start.y),
+    );
+    const chargePoint = {
+      x: cutter.x + (targetPoint.x - cutter.x) * charge,
+      y: cutter.y + (targetPoint.y - cutter.y) * charge,
+    };
     context.save();
     context.lineCap = "round";
-    context.strokeStyle = `rgba(226, 43, 62, ${0.18 + pulse * 0.35})`;
-    context.lineWidth = 1.5;
+
+    context.save();
+    context.globalCompositeOperation = "multiply";
+    context.fillStyle = "rgba(1, 2, 3, 0.42)";
+    context.beginPath();
+    context.ellipse(
+      segmentMid.x,
+      segmentMid.y,
+      segmentLength * 0.92 + 26,
+      28,
+      Math.atan2(end.y - start.y, end.x - start.x),
+      0,
+      Math.PI * 2,
+    );
+    context.fill();
+    context.restore();
+
+    context.strokeStyle = snapshot.highContrast
+      ? `rgba(255, 255, 255, ${0.38 + pulse * 0.24})`
+      : `rgba(255, 85, 98, ${0.34 + pulse * 0.34})`;
+    context.lineWidth = 2;
     context.setLineDash([6, 7]);
     context.beginPath();
     context.moveTo(cutter.x, cutter.y);
     context.lineTo(targetPoint.x, targetPoint.y);
     context.stroke();
     context.setLineDash([]);
-    context.strokeStyle = `rgba(226, 43, 62, ${0.38 + pulse})`;
-    context.lineWidth = 8;
+
+    context.strokeStyle = snapshot.highContrast
+      ? `rgba(255, 255, 255, ${0.44 + pulse * 0.28})`
+      : `rgba(226, 43, 62, ${0.28 + pulse * 0.42})`;
+    context.lineWidth = 13;
     context.beginPath();
     context.moveTo(start.x, start.y);
     context.lineTo(end.x, end.y);
     context.stroke();
-    context.strokeStyle = "#f07b86";
+
+    context.strokeStyle = snapshot.highContrast
+      ? "#ffffff"
+      : `rgba(255, 126, 137, ${0.72 + pulse * 0.28})`;
+    context.lineWidth = 4;
+    context.beginPath();
+    context.moveTo(start.x, start.y);
+    context.lineTo(end.x, end.y);
+    context.stroke();
+
+    context.fillStyle = snapshot.highContrast ? "#ffffff" : "#ffd6da";
+    context.beginPath();
+    context.arc(
+      chargePoint.x,
+      chargePoint.y,
+      3.4 + charge * 2.4,
+      0,
+      Math.PI * 2,
+    );
+    context.fill();
+
+    context.strokeStyle = snapshot.highContrast ? "#ffffff" : "#f07b86";
     context.lineWidth = 2;
     context.beginPath();
     context.arc(

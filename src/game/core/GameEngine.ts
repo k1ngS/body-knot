@@ -1042,6 +1042,7 @@ export class GameEngine {
       cellIds,
       previewCount: cellIds.length,
       includesCore: false,
+      canBindCore: false,
       tutorial: true,
       pulse: (this.candidate?.pulse ?? 0) + delta * 5,
     };
@@ -1337,6 +1338,10 @@ export class GameEngine {
       cellIds,
       previewCount: cellIds.length + (includesCore ? 1 : 0),
       includesCore,
+      canBindCore:
+        this.phase === "observer" &&
+        includesCore &&
+        this.isValidFinalCoreKnot(candidate),
       tutorial: this.tutorialActive,
       pulse: (this.candidate?.pulse ?? 0) + delta * 5,
     };

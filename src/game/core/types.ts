@@ -105,6 +105,7 @@ export type KnotCandidate = {
   cellIds: number[];
   previewCount: number;
   includesCore: boolean;
+  canBindCore: boolean;
   tutorial: boolean;
   pulse: number;
 };

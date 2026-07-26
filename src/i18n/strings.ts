@@ -17,6 +17,7 @@ export const strings = {
     finalB: "MOVE. LET IT LOCK.",
     finalC: "BIND THE CORE.",
     finalMove: "MOVE. CIRCLE. CROSS.",
+    crossNow: "CROSS NOW",
   },
   revealLines: [
     "I SEE THE HAND THAT GATHERS THEM.",
