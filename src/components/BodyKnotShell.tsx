@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { type RefObject, useEffect, useRef } from "react";
 import { GameEngine } from "@/game/core/GameEngine";
 import { strings } from "@/i18n/strings";
 import { type GameSettings, useGameUiStore } from "@/stores/useGameUiStore";
@@ -16,6 +16,8 @@ const settingKeys = [
 export function BodyKnotShell() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const engineRef = useRef<GameEngine | null>(null);
+  const settingsButtonRef = useRef<HTMLButtonElement | null>(null);
+  const settingsPanelRef = useRef<HTMLElement | null>(null);
   const {
     caption,
     captureToast,
@@ -27,11 +29,16 @@ export function BodyKnotShell() {
     revealMenu,
     settings,
     settingsVisible,
+    setDebugVisible,
+    setSettingsVisible,
     setSettings,
     toggleSettings,
   } = useGameUiStore();
+  const isDevelopment = process.env.NODE_ENV !== "production";
 
   useEffect(() => {
+    setDebugVisible(false);
+
     if (!canvasRef.current) {
       return undefined;
     }
@@ -43,13 +50,64 @@ export function BodyKnotShell() {
       engine.destroy();
       engineRef.current = null;
     };
-  }, []);
+  }, [setDebugVisible]);
+
+  useEffect(() => {
+    if (!settingsVisible) {
+      return undefined;
+    }
+
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setSettingsVisible(false);
+      }
+    };
+
+    window.addEventListener("keydown", closeOnEscape);
+
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [setSettingsVisible, settingsVisible]);
+
+  useEffect(() => {
+    if (!settingsVisible) {
+      return undefined;
+    }
+
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      const target = event.target;
+
+      if (!(target instanceof Node)) {
+        return;
+      }
+
+      if (
+        settingsPanelRef.current?.contains(target) ||
+        settingsButtonRef.current?.contains(target)
+      ) {
+        return;
+      }
+
+      setSettingsVisible(false);
+    };
+
+    document.addEventListener("pointerdown", closeOnOutsidePointer, true);
+
+    return () =>
+      document.removeEventListener("pointerdown", closeOnOutsidePointer, true);
+  }, [setSettingsVisible, settingsVisible]);
+
+  const cursorClass =
+    phase === "reveal" || phase === "observer"
+      ? "cursor-reveal"
+      : phase === "playing"
+        ? "cursor-game"
+        : "cursor-menu";
 
   return (
     <main className="relative h-dvh w-screen overflow-hidden bg-[#020304] text-[#e8e8e4]">
       <canvas
         ref={canvasRef}
-        className="absolute inset-0 block h-full w-full cursor-crosshair"
+        className={`absolute inset-0 block h-full w-full ${cursorClass}`}
         aria-label="BODY//KNOT game canvas"
       />
 
@@ -116,9 +174,7 @@ export function BodyKnotShell() {
           )}
           <div className="absolute bottom-4 left-5 right-5 hidden justify-between text-[0.58rem] uppercase tracking-[0.16em] text-[#5e656d] sm:flex">
             <span>{strings.hud.membrane}</span>
-            {phase === "playing" && (
-              <span>Right click cancels. Space dashes.</span>
-            )}
+            {phase === "playing" && <span>{strings.hud.controls}</span>}
           </div>
         </section>
       )}
@@ -191,6 +247,7 @@ export function BodyKnotShell() {
       )}
 
       <button
+        ref={settingsButtonRef}
         className="absolute right-4 top-16 z-20 border border-[#2a3035] bg-[#050708aa] px-3 py-2 text-[0.6rem] font-black uppercase tracking-[0.16em] text-[#929aa0] backdrop-blur hover:text-white"
         type="button"
         onClick={toggleSettings}
@@ -199,17 +256,22 @@ export function BodyKnotShell() {
       </button>
 
       {settingsVisible && (
-        <SettingsPanel settings={settings} onChange={setSettings} />
+        <SettingsPanel
+          panelRef={settingsPanelRef}
+          settings={settings}
+          onChange={setSettings}
+        />
       )}
 
-      {debugVisible && (
+      {isDevelopment && debugVisible && (
         <div className="absolute left-4 top-16 z-20 w-64 border border-[#2b3438] bg-[#020304d9] p-3 font-mono text-[0.68rem] leading-5 text-[#9ee7ef] backdrop-blur">
           <div>FPS {debug.fps}</div>
           <div>STEP {debug.step}</div>
           <div>CHAIN {debug.chainLinks}</div>
-          <div>PATH {debug.pathLength.toFixed(2)}</div>
-          <div>AREA {debug.enclosedArea.toFixed(2)}</div>
+          <div>SPAN {debug.knotSpan}</div>
+          <div>AREA {debug.knotArea.toFixed(2)}</div>
           <div>INSIDE {debug.cellsInside}</div>
+          <div>CUTTER {debug.cutterTarget}</div>
           <div>PHASE {debug.phase}</div>
         </div>
       )}
@@ -218,14 +280,21 @@ export function BodyKnotShell() {
 }
 
 function SettingsPanel({
+  panelRef,
   settings,
   onChange,
 }: {
+  panelRef: RefObject<HTMLElement | null>;
   settings: GameSettings;
   onChange: (settings: Partial<GameSettings>) => void;
 }) {
   return (
-    <section className="absolute right-4 top-[104px] z-30 w-[min(300px,calc(100vw-2rem))] border border-[#2a3035] bg-[#050708e8] p-4 text-xs text-[#c8cecc] shadow-[0_24px_80px_#000b] backdrop-blur">
+    <section
+      aria-label={strings.settings}
+      ref={panelRef}
+      className="absolute right-4 top-[104px] z-30 w-[min(300px,calc(100vw-2rem))] border border-[#2a3035] bg-[#050708e8] p-4 text-xs text-[#c8cecc] shadow-[0_24px_80px_#000b] backdrop-blur"
+      role="dialog"
+    >
       <div className="mb-3 text-[0.62rem] font-black uppercase tracking-[0.22em] text-[#747b82]">
         {strings.settings}
       </div>

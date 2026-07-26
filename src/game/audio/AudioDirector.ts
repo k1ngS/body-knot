@@ -128,7 +128,6 @@ export class AudioDirector {
     name:
       | "dash"
       | "close"
-      | "constrict"
       | "capture"
       | "sever"
       | "reveal"
@@ -138,7 +137,6 @@ export class AudioDirector {
     const map = {
       capture: [176, 0.22, 0.12],
       close: [92, 0.16, 0.09],
-      constrict: [120, 0.08, 0.055],
       dash: [240, 0.07, 0.05],
       observer: [66, 0.18, 0.08],
       reveal: [36, 0.8, 0.13],

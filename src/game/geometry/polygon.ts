@@ -96,6 +96,35 @@ const segmentsIntersect = (a: Vec2, b: Vec2, c: Vec2, d: Vec2): boolean => {
   return o1 * o2 < 0 && o3 * o4 < 0;
 };
 
+export const segmentIntersection = (
+  a: Vec2,
+  b: Vec2,
+  c: Vec2,
+  d: Vec2,
+): Vec2 | null => {
+  const denominator = (a.x - b.x) * (c.y - d.y) - (a.y - b.y) * (c.x - d.x);
+
+  if (Math.abs(denominator) < 0.00001) {
+    return null;
+  }
+
+  const aCross = a.x * b.y - a.y * b.x;
+  const cCross = c.x * d.y - c.y * d.x;
+  const x = (aCross * (c.x - d.x) - (a.x - b.x) * cCross) / denominator;
+  const y = (aCross * (c.y - d.y) - (a.y - b.y) * cCross) / denominator;
+  const within =
+    x >= Math.min(a.x, b.x) - 0.001 &&
+    x <= Math.max(a.x, b.x) + 0.001 &&
+    x >= Math.min(c.x, d.x) - 0.001 &&
+    x <= Math.max(c.x, d.x) + 0.001 &&
+    y >= Math.min(a.y, b.y) - 0.001 &&
+    y <= Math.max(a.y, b.y) + 0.001 &&
+    y >= Math.min(c.y, d.y) - 0.001 &&
+    y <= Math.max(c.y, d.y) + 0.001;
+
+  return within ? { x, y } : null;
+};
+
 export const hasObviousSelfIntersection = (points: Vec2[]): boolean => {
   if (points.length < 6) {
     return false;

@@ -2,26 +2,36 @@ import { strings } from "@/i18n/strings";
 import { useGameUiStore } from "@/stores/useGameUiStore";
 import { AudioDirector } from "../audio/AudioDirector";
 import {
-  hasObviousSelfIntersection,
-  pathLength,
   pointInPolygon,
   polygonArea,
   polygonCentroid,
-  samplePathFromEnd,
-  simplifyPath,
 } from "../geometry/polygon";
 import { clamp, dist, normalize, type Vec2, vec } from "../geometry/vector";
 import { CanvasRenderer } from "../rendering/CanvasRenderer";
 import {
+  applySafeCut,
+  canCutterThreaten,
+  cutterTelegraphReady,
+  findValidCutterTarget,
+  isCutterTargetValid,
+  resetCutterTelegraph,
+  runCutterLifecycleChecks,
+} from "../systems/cutterSafety";
+import { detectKnotCandidate, detectSelfKnot } from "../systems/knotDetection";
+import {
   CHAIN_SEGMENT_LENGTH,
+  CUTTER_MIN_SECONDS,
   FIXED_TIMESTEP,
   INITIAL_LINKS,
-  LOOP_CLOSE_DISTANCE,
-  MIN_LOOP_AREA,
-  MIN_LOOP_LENGTH,
+  KNOT_CAPTURE_SECONDS,
+  KNOT_COOLDOWN_SECONDS,
+  KNOT_HITSTOP_SECONDS,
+  MIN_KNOT_AREA,
+  MIN_KNOT_SPAN,
   OBSERVER_DURATION,
-  PATH_RECORD_DISTANCE,
-  REVELATION_TIME,
+  PROTECTED_CHAIN_LINKS,
+  REVELATION_FORCE_SECONDS,
+  REVELATION_MIN_SECONDS,
   WORLD_SIZE,
 } from "./constants";
 import type {
@@ -29,7 +39,8 @@ import type {
   CellType,
   ChainLink,
   Cutter,
-  LassoState,
+  KnotCandidate,
+  KnotState,
   LinkKind,
   ObserverAttack,
   Particle,
@@ -41,7 +52,6 @@ type RuntimePhase = "menu" | "playing" | "reveal" | "observer" | "ending";
 
 type InputState = {
   keys: Set<string>;
-  leftHeld: boolean;
   mouseScreen: Vec2;
   mouseWorld: Vec2;
 };
@@ -56,6 +66,7 @@ export class GameEngine {
   private accumulator = 0;
   private phase: RuntimePhase = "menu";
   private startedAt = 0;
+  private gameplayElapsed = 0;
   private phaseStartedAt = 0;
   private simulationStep = 0;
   private revealStage = -1;
@@ -67,9 +78,13 @@ export class GameEngine {
   private fpsTimer = 0;
   private attackTimer = 0;
   private firstCutterQueued = false;
+  private knotCooldown = 0;
+  private lastKnotSpan = 0;
+  private largestCapture = 0;
+  private candidate: KnotCandidate | null = null;
+  private chainWave = 0;
   private input: InputState = {
     keys: new Set(),
-    leftHeld: false,
     mouseScreen: { x: 0, y: 0 },
     mouseWorld: { x: 16, y: 16 },
   };
@@ -81,17 +96,21 @@ export class GameEngine {
   private particles: Particle[] = [];
   private observerAttacks: ObserverAttack[] = [];
   private cutter: Cutter | null = null;
-  private lasso: LassoState = { mode: "idle" };
+  private knot: KnotState = { mode: "idle" };
   private ghostRoute: Vec2[] = [
-    { x: 12.7, y: 16.8 },
-    { x: 12.9, y: 13.8 },
-    { x: 16.4, y: 13.5 },
-    { x: 18.1, y: 16.5 },
-    { x: 15.2, y: 18.4 },
-    { x: 12.7, y: 16.8 },
+    { x: 16.5, y: 19.2 },
+    { x: 18.2, y: 19.4 },
+    { x: 18.4, y: 20.8 },
+    { x: 16.2, y: 21.0 },
+    { x: 15.7, y: 19.3 },
+    { x: 17.4, y: 18.4 },
   ];
 
   constructor(canvas: HTMLCanvasElement) {
+    if (isDevelopment) {
+      runCutterLifecycleChecks();
+    }
+
     this.renderer = new CanvasRenderer(canvas);
     this.resetSimulation();
     this.installEvents();
@@ -116,10 +135,12 @@ export class GameEngine {
     this.resetSimulation();
     this.phase = "playing";
     this.startedAt = performance.now() / 1000;
+    this.gameplayElapsed = 0;
     this.phaseStartedAt = this.startedAt;
     this.updateTitle("BODY//KNOT");
+    useGameUiStore.getState().setSettingsVisible(false);
     useGameUiStore.getState().setPhase("playing");
-    useGameUiStore.getState().setPrompt(strings.prompts.anchor);
+    useGameUiStore.getState().setPrompt(strings.prompts.circle);
     this.audio.tone("close");
   }
 
@@ -171,11 +192,17 @@ export class GameEngine {
     this.particles = [];
     this.observerAttacks = [];
     this.cutter = null;
-    this.lasso = { mode: "idle" };
+    this.knot = { mode: "idle" };
     this.captures = 0;
+    this.gameplayElapsed = 0;
     this.firstCutterQueued = false;
     this.revealStage = -1;
     this.attackTimer = 0;
+    this.knotCooldown = 0;
+    this.lastKnotSpan = 0;
+    this.largestCapture = 0;
+    this.candidate = null;
+    this.chainWave = 0;
     this.shake = 0;
     this.simulationStep = 0;
 
@@ -195,15 +222,20 @@ export class GameEngine {
 
     this.spawnGuidedCells();
 
-    for (let index = 0; index < 15; index += 1) {
-      this.cells.push(this.createRandomCell(false));
+    for (const center of [
+      { x: 10.5, y: 12.4 },
+      { x: 22.4, y: 14.8 },
+      { x: 19.8, y: 22.2 },
+      { x: 9.4, y: 22.6 },
+    ]) {
+      this.spawnCellCluster(center, 4, false);
     }
   }
 
   private createPlayer(): Player {
     return {
-      pos: { x: 16.5, y: 20 },
-      prev: { x: 16.5, y: 20 },
+      pos: { x: 16.5, y: 19.2 },
+      prev: { x: 16.5, y: 19.2 },
       vel: vec(),
       radius: 0.42,
       dashCooldown: 0,
@@ -213,9 +245,8 @@ export class GameEngine {
 
   private spawnGuidedCells() {
     const guided: Array<[CellType, number, number]> = [
-      ["hunter", 14.5, 15.9],
-      ["platelet", 15.5, 16.2],
-      ["fever", 16.2, 15.2],
+      ["hunter", 16.55, 19.85],
+      ["platelet", 17.08, 20.05],
     ];
 
     for (const [type, x, y] of guided) {
@@ -242,8 +273,8 @@ export class GameEngine {
       id: this.cellId,
       type,
       pos: {
-        x: 3 + Math.random() * 26,
-        y: 4 + Math.random() * 24,
+        x: 8 + Math.random() * 16,
+        y: 9 + Math.random() * 15,
       },
       vel: vec(),
       radius,
@@ -254,6 +285,72 @@ export class GameEngine {
     this.cellId += 1;
 
     return cell;
+  }
+
+  private spawnCellCluster(center: Vec2, count: number, highlighted: boolean) {
+    for (let index = 0; index < count; index += 1) {
+      const angle =
+        (index / Math.max(1, count)) * Math.PI * 2 + Math.random() * 0.7;
+      const radius = 0.35 + Math.random() * 1.25;
+      const cell = this.createRandomCell(highlighted);
+      cell.pos = {
+        x: clamp(center.x + Math.cos(angle) * radius, 1.4, WORLD_SIZE - 1.4),
+        y: clamp(center.y + Math.sin(angle) * radius, 1.4, WORLD_SIZE - 1.4),
+      };
+
+      if (dist(cell.pos, this.player.pos) < 2.4) {
+        const away = normalize({
+          x: cell.pos.x - this.player.pos.x,
+          y: cell.pos.y - this.player.pos.y,
+        });
+        cell.pos.x = clamp(
+          this.player.pos.x + away.x * 2.6,
+          1.4,
+          WORLD_SIZE - 1.4,
+        );
+        cell.pos.y = clamp(
+          this.player.pos.y + away.y * 2.6,
+          1.4,
+          WORLD_SIZE - 1.4,
+        );
+      }
+
+      this.cells.push(cell);
+    }
+  }
+
+  private nextClusterCenter(): Vec2 {
+    const phase = this.gameplayElapsed * 0.22 + this.captures * 1.37;
+    const centers = [
+      {
+        x: 12 + Math.sin(phase) * 2.6,
+        y: 11.5 + Math.cos(phase * 0.9) * 1.8,
+      },
+      {
+        x: 20.4 + Math.cos(phase * 0.8) * 2.4,
+        y: 13.2 + Math.sin(phase) * 2,
+      },
+      {
+        x: 19 + Math.sin(phase * 0.7) * 2.8,
+        y: 22 + Math.cos(phase) * 1.6,
+      },
+      {
+        x: 10.5 + Math.cos(phase) * 2.2,
+        y: 22.4 + Math.sin(phase * 0.6) * 2,
+      },
+    ];
+    let best = centers[this.captures % centers.length];
+
+    for (const center of centers) {
+      if (dist(center, this.player.pos) > dist(best, this.player.pos)) {
+        best = center;
+      }
+    }
+
+    return {
+      x: clamp(best.x, 4.5, WORLD_SIZE - 4.5),
+      y: clamp(best.y, 4.5, WORLD_SIZE - 4.5),
+    };
   }
 
   private loop(nowMs: number) {
@@ -283,51 +380,83 @@ export class GameEngine {
   private step(delta: number, now: number) {
     this.simulationStep += 1;
     this.shake = Math.max(0, this.shake - delta * 2.8);
+    this.chainWave = Math.max(0, this.chainWave - delta * 1.8);
+    const frozen =
+      this.phase === "playing" &&
+      this.knot.mode === "capturing" &&
+      this.knot.hitStop > 0;
+
+    if (this.phase === "playing" && useGameUiStore.getState().settingsVisible) {
+      this.updateDebug();
+      return;
+    }
 
     if (this.phase === "playing") {
-      this.updatePlaying(delta, now);
+      this.updatePlaying(delta);
     } else if (this.phase === "reveal") {
       this.updateReveal(now);
     } else if (this.phase === "observer") {
       this.updateObserver(delta, now);
     }
 
-    this.updateCells(delta);
-    this.updateChain(delta);
+    if (!frozen) {
+      this.updateCells(delta);
+      this.updateChain(delta);
+
+      if (this.phase === "playing") {
+        this.updateKnotCandidate(delta);
+        this.detectKnotAfterChain();
+      }
+    } else if (this.knot.mode === "capturing") {
+      this.knot.hitStop = Math.max(0, this.knot.hitStop - delta);
+    }
+
     this.updateParticles(delta);
     this.updateDebug();
   }
 
-  private updatePlaying(delta: number, now: number) {
-    const elapsed = now - this.startedAt;
+  private updatePlaying(delta: number) {
+    this.gameplayElapsed += delta;
+    const elapsed = this.gameplayElapsed;
     const store = useGameUiStore.getState();
     store.setClock(`00:${Math.floor(elapsed).toString().padStart(2, "0")}`);
 
-    if (this.lasso.mode !== "closed") {
-      this.updatePlayer(delta, 7.6, 6.4);
+    this.knotCooldown = Math.max(0, this.knotCooldown - delta);
+
+    if (this.knot.mode === "capturing") {
+      this.updateKnotCapture(delta);
     } else {
-      this.player.vel = {
-        x: this.player.vel.x * 0.7,
-        y: this.player.vel.y * 0.7,
-      };
+      this.updatePlayer(delta, 24.5, 5.05);
     }
 
-    this.updateLasso(delta);
     this.updateCutter(delta);
 
-    if (!this.firstCutterQueued && this.captures > 0) {
+    if (
+      !this.firstCutterQueued &&
+      this.captures >= 2 &&
+      elapsed >= CUTTER_MIN_SECONDS
+    ) {
       this.firstCutterQueued = true;
       this.spawnCutter();
       store.setToast("CUTTER CELL ENTERED");
     }
 
-    if (elapsed > 45 && this.captures < 3 && this.lasso.mode === "idle") {
-      store.setPrompt(strings.prompts.larger);
-    } else if (elapsed > 54 && this.lasso.mode === "idle") {
+    if (this.captures === 0 && elapsed < 2.7) {
+      store.setPrompt(strings.prompts.circle);
+    } else if (this.captures === 0) {
+      store.setPrompt(strings.prompts.cross);
+    } else if (elapsed > 84 && this.knot.mode === "idle") {
       store.setPrompt(strings.prompts.cursor);
+    } else if (elapsed > 68 && this.knot.mode === "idle") {
+      store.setPrompt(strings.prompts.larger);
+    } else if (this.knot.mode === "idle") {
+      store.setPrompt(strings.prompts.free);
     }
 
-    if (elapsed >= REVELATION_TIME || this.captures >= 3) {
+    if (
+      elapsed >= REVELATION_FORCE_SECONDS ||
+      (elapsed >= REVELATION_MIN_SECONDS && this.captures >= 8)
+    ) {
       this.triggerRevelation();
     }
   }
@@ -439,11 +568,6 @@ export class GameEngine {
       this.shake = Math.max(this.shake, 0.18);
     }
 
-    if (this.lasso.mode === "anchored" && this.lasso.tension > 0.72) {
-      this.player.vel.x *= 0.86;
-      this.player.vel.y *= 0.86;
-    }
-
     this.player.pos.x = clamp(
       this.player.pos.x + this.player.vel.x * delta,
       0.8,
@@ -456,161 +580,194 @@ export class GameEngine {
     );
   }
 
-  private updateLasso(delta: number) {
-    const store = useGameUiStore.getState();
-
-    if (this.lasso.mode === "idle") {
-      if (this.captures === 0) {
-        store.setPrompt(strings.prompts.anchor);
-      }
-
+  private detectKnotAfterChain() {
+    if (this.knot.mode !== "idle" || this.knotCooldown > 0) {
       return;
     }
 
-    if (this.lasso.mode === "anchored") {
-      const last = this.lasso.path[this.lasso.path.length - 1];
-      const toPlayer = dist(last, this.player.pos);
-      const available = this.availableChainLength();
-      const projectedLength = this.lasso.length + toPlayer;
+    const selfKnot = detectSelfKnot(this.chain, {
+      protectedLinks: this.captures === 0 ? 2 : PROTECTED_CHAIN_LINKS,
+      minSpan: this.captures === 0 ? 2 : MIN_KNOT_SPAN,
+      minArea: this.captures === 0 ? 0.28 : MIN_KNOT_AREA,
+      forgiveness: this.captures === 0 ? 1.08 : 0.56,
+    });
 
-      if (
-        toPlayer >= PATH_RECORD_DISTANCE &&
-        projectedLength <= available * 1.05
-      ) {
-        this.lasso.path.push({ ...this.player.pos });
-        this.lasso.path = simplifyPath(this.lasso.path, 0.12);
-        this.lasso.length = pathLength(this.lasso.path);
-      }
-
-      this.lasso.tension = clamp(projectedLength / available, 0, 1);
-
-      if (this.lasso.tension > 0.88 && this.simulationStep % 12 === 0) {
-        this.audio.tone("tension");
-      }
-
-      const closeDistance = dist(this.player.pos, this.lasso.anchor);
-      const polygon = [...this.lasso.path, { ...this.player.pos }];
-      const area = polygonArea(polygon);
-      const valid =
-        closeDistance <= LOOP_CLOSE_DISTANCE &&
-        this.lasso.length >= MIN_LOOP_LENGTH &&
-        area >= MIN_LOOP_AREA &&
-        !hasObviousSelfIntersection(polygon) &&
-        this.lasso.tension < 1.02;
-
-      if (valid) {
-        this.closeLoop(polygon, area);
-        return;
-      }
-
-      store.setPrompt(
-        closeDistance < 2 && this.lasso.length > MIN_LOOP_LENGTH * 0.65
-          ? strings.prompts.return
-          : strings.prompts.encircle,
-      );
-    } else {
-      store.setPrompt(strings.prompts.constrict);
-
-      if (this.input.leftHeld) {
-        this.lasso.progress = clamp(this.lasso.progress + delta / 0.95, 0, 1);
-        this.audio.tone("constrict");
-        this.pullCellsIntoLoop(delta);
-
-        if (this.lasso.progress >= 1) {
-          this.finishConstrict();
-        }
-      }
-    }
-  }
-
-  private beginAnchor(point: Vec2) {
-    const reachable =
-      dist(this.player.pos, point) <= this.availableChainLength() + 0.35;
-
-    if (!reachable || this.lasso.mode !== "idle") {
+    if (!selfKnot) {
       return;
     }
 
-    this.lasso = {
-      mode: "anchored",
-      anchor: { ...point },
-      path: [{ ...point }, { ...this.player.pos }],
-      length: dist(point, this.player.pos),
-      tension: 0,
+    const capturedIds = this.cells
+      .filter((cell) => pointInPolygon(cell.pos, selfKnot.polygon))
+      .map((cell) => cell.id);
+    const includesCutter =
+      this.cutter != null && pointInPolygon(this.cutter.pos, selfKnot.polygon);
+    this.lastKnotSpan = selfKnot.span;
+    this.knot = {
+      mode: "capturing",
+      polygon: selfKnot.polygon,
+      area: selfKnot.area,
+      center: selfKnot.center,
+      progress: capturedIds.length > 0 || includesCutter ? 0 : 0.72,
+      hitStop: this.captureHitStop(
+        capturedIds.length + (includesCutter ? 1 : 0),
+      ),
+      capturedIds,
+      includesCutter,
     };
-    this.audio.tone("close");
-    useGameUiStore.getState().setPrompt(strings.prompts.encircle);
+    this.candidate = null;
+    this.knotCooldown = KNOT_COOLDOWN_SECONDS;
+    this.player.vel.x *= 0.38;
+    this.player.vel.y *= 0.38;
+    this.shake = Math.max(
+      this.shake,
+      capturedIds.length > 1 || includesCutter ? 0.28 : 0.1,
+    );
+    this.audio.tone(
+      capturedIds.length > 0 || includesCutter ? "close" : "dash",
+    );
   }
 
-  private closeLoop(polygon: Vec2[], area: number) {
-    const closedPolygon = simplifyPath(polygon, 0.16);
-    this.lasso = {
-      mode: "closed",
-      anchor: closedPolygon[0],
-      path: closedPolygon,
-      polygon: closedPolygon,
-      area,
-      center: polygonCentroid(closedPolygon),
-      progress: 0,
+  private updateKnotCandidate(delta: number) {
+    if (this.knot.mode !== "idle" || this.knotCooldown > 0) {
+      this.candidate = null;
+      return;
+    }
+
+    const candidate = detectKnotCandidate(this.chain, {
+      protectedLinks: this.captures === 0 ? 2 : PROTECTED_CHAIN_LINKS,
+      minSpan: this.captures === 0 ? 2 : MIN_KNOT_SPAN,
+      minArea: this.captures === 0 ? 0.24 : MIN_KNOT_AREA,
+      forgiveness: this.captures === 0 ? 1.32 : 0.78,
+    });
+
+    if (!candidate) {
+      this.candidate = null;
+      return;
+    }
+
+    const cellIds = this.cells
+      .filter((cell) => pointInPolygon(cell.pos, candidate.polygon))
+      .map((cell) => cell.id);
+    this.candidate = {
+      targetIndex: candidate.crossedIndex,
+      point: candidate.intersection,
+      polygon: candidate.polygon,
+      center: candidate.center,
+      area: candidate.area,
+      cellIds,
+      pulse: (this.candidate?.pulse ?? 0) + delta * 5,
     };
-    this.player.vel = vec();
-    this.shake = Math.max(this.shake, 0.22);
-    this.audio.tone("close");
-    useGameUiStore.getState().setPrompt(strings.prompts.constrict);
+
+    if (this.simulationStep % 18 === 0) {
+      this.audio.tone("tension");
+    }
   }
 
-  private pullCellsIntoLoop(delta: number) {
-    if (this.lasso.mode !== "closed") {
+  private updateKnotCapture(delta: number) {
+    if (this.knot.mode !== "capturing") {
+      return;
+    }
+
+    if (this.knot.hitStop > 0) {
+      this.knot.hitStop = Math.max(0, this.knot.hitStop - delta);
+      return;
+    }
+
+    this.knot.progress = clamp(
+      this.knot.progress + delta / KNOT_CAPTURE_SECONDS,
+      0,
+      1,
+    );
+    this.pullCellsIntoKnot(delta);
+
+    if (this.knot.progress >= 1) {
+      this.finishKnotCapture();
+    }
+  }
+
+  private pullCellsIntoKnot(delta: number) {
+    if (this.knot.mode !== "capturing") {
       return;
     }
 
     for (const cell of this.cells) {
-      if (!pointInPolygon(cell.pos, this.lasso.polygon)) {
+      if (!this.knot.capturedIds.includes(cell.id)) {
         continue;
       }
 
       const towardCenter = normalize({
-        x: this.lasso.center.x - cell.pos.x,
-        y: this.lasso.center.y - cell.pos.y,
+        x: this.knot.center.x - cell.pos.x,
+        y: this.knot.center.y - cell.pos.y,
       });
-      cell.vel.x += towardCenter.x * delta * 6.4;
-      cell.vel.y += towardCenter.y * delta * 6.4;
+      cell.vel.x += towardCenter.x * delta * 12;
+      cell.vel.y += towardCenter.y * delta * 12;
+    }
+
+    if (this.cutter && this.knot.includesCutter) {
+      const towardCenter = normalize({
+        x: this.knot.center.x - this.cutter.pos.x,
+        y: this.knot.center.y - this.cutter.pos.y,
+      });
+      this.cutter.vel.x += towardCenter.x * delta * 10;
+      this.cutter.vel.y += towardCenter.y * delta * 10;
     }
   }
 
-  private finishConstrict() {
-    if (this.lasso.mode !== "closed") {
+  private finishKnotCapture() {
+    if (this.knot.mode !== "capturing") {
       return;
     }
 
     const captured = this.cells.filter((cell) =>
-      pointInPolygon(
-        cell.pos,
-        this.lasso.mode === "closed" ? this.lasso.polygon : [],
-      ),
+      this.knot.mode === "capturing"
+        ? this.knot.capturedIds.includes(cell.id)
+        : false,
     );
+    const totalTargets = captured.length + (this.knot.includesCutter ? 1 : 0);
 
     for (const cell of captured) {
       this.addCapturedLink(cell.type);
       this.spawnBurst(
         cell.pos,
         cell.type === "fever" ? "#b08bff" : "#bffaff",
-        9,
+        captured.length > 1 ? 14 : 8,
       );
+    }
+
+    if (this.cutter && this.knot.includesCutter) {
+      this.addCapturedLink("fever");
+      this.spawnBurst(this.cutter.pos, "#e63848", 18);
+      this.cutter = null;
     }
 
     this.cells = this.cells.filter((cell) => !captured.includes(cell));
 
-    while (this.cells.length < 22) {
-      this.cells.push(this.createRandomCell(false));
+    while (this.cells.length < 28) {
+      this.spawnCellCluster(this.nextClusterCenter(), 3, false);
     }
 
-    this.captures += 1;
-    this.lasso = { mode: "idle" };
-    this.input.leftHeld = false;
-    this.shake = Math.max(this.shake, captured.length > 2 ? 0.36 : 0.18);
-    this.audio.tone("capture");
-    useGameUiStore.getState().setToast(`ASSIMILATED ${captured.length}`);
+    if (totalTargets > 0) {
+      this.captures += 1;
+      this.largestCapture = Math.max(this.largestCapture, totalTargets);
+      this.shake = Math.max(
+        this.shake,
+        totalTargets >= 4 ? 0.34 : totalTargets > 1 ? 0.26 : 0.12,
+      );
+      this.chainWave = totalTargets >= 4 ? 1 : Math.max(this.chainWave, 0.45);
+      this.audio.tone("capture");
+      if (totalTargets >= 4) {
+        this.audio.tone("sever");
+      } else if (totalTargets >= 2) {
+        this.audio.tone("close");
+      }
+      useGameUiStore.getState().setToast(this.captureMessage(totalTargets));
+    } else {
+      this.shake = Math.max(this.shake, 0.08);
+      this.audio.tone("dash");
+    }
+
+    this.knot = { mode: "idle" };
+    this.candidate = null;
     useGameUiStore.getState().setPrompt(strings.prompts.free);
 
     if (this.captures === 1) {
@@ -618,6 +775,30 @@ export class GameEngine {
         cell.highlighted = false;
       }
     }
+  }
+
+  private captureMessage(totalTargets: number) {
+    if (totalTargets >= 4) {
+      return `MASS KNOT x${totalTargets}`;
+    }
+
+    if (totalTargets >= 2) {
+      return `KNOT x${totalTargets}`;
+    }
+
+    return "BOUND";
+  }
+
+  private captureHitStop(totalTargets: number) {
+    if (totalTargets >= 4) {
+      return 0.14;
+    }
+
+    if (totalTargets >= 2) {
+      return 0.115;
+    }
+
+    return totalTargets > 0 ? KNOT_HITSTOP_SECONDS : 0;
   }
 
   private addCapturedLink(type: CellType) {
@@ -635,18 +816,6 @@ export class GameEngine {
       mass,
       dead: false,
     });
-  }
-
-  private cancelLasso() {
-    if (this.lasso.mode !== "idle") {
-      this.lasso = { mode: "idle" };
-      useGameUiStore
-        .getState()
-        .setPrompt(
-          this.captures === 0 ? strings.prompts.anchor : strings.prompts.free,
-        );
-      this.audio.tone("dash");
-    }
   }
 
   private updateCells(delta: number) {
@@ -692,19 +861,6 @@ export class GameEngine {
 
     this.chain[0].pos = { ...this.player.pos };
     this.chain[0].prev = { ...this.player.prev };
-
-    if (this.lasso.mode === "anchored" || this.lasso.mode === "closed") {
-      const path =
-        this.lasso.mode === "closed" ? this.lasso.polygon : this.lasso.path;
-
-      for (let index = 1; index < this.chain.length; index += 1) {
-        const sampled = samplePathFromEnd(path, index * CHAIN_SEGMENT_LENGTH);
-        this.chain[index].prev = { ...this.chain[index].pos };
-        this.chain[index].pos = sampled;
-      }
-
-      return;
-    }
 
     for (let index = 1; index < this.chain.length; index += 1) {
       const link = this.chain[index];
@@ -753,12 +909,22 @@ export class GameEngine {
   }
 
   private spawnCutter() {
+    const target = findValidCutterTarget(this.chain);
+
+    if (!target) {
+      return;
+    }
+
     this.cutter = {
-      pos: { x: 1.2, y: 4 + Math.random() * 20 },
+      pos: {
+        x: clamp(target.point.x - 1.5, 0.8, WORLD_SIZE - 0.8),
+        y: clamp(target.point.y + 0.8, 0.8, WORLD_SIZE - 0.8),
+      },
       vel: vec(),
-      cooldown: 1.2,
+      cooldown: 0.6,
       alive: true,
-      targetIndex: 6,
+      target,
+      telegraph: 0,
     };
   }
 
@@ -767,14 +933,47 @@ export class GameEngine {
       return;
     }
 
-    this.cutter.cooldown = Math.max(0, this.cutter.cooldown - delta);
-    const target = this.cutterTarget();
+    if (!canCutterThreaten(this.chain)) {
+      this.cutter.target = null;
+      this.cutter.telegraph = 0;
+      return;
+    }
+
+    if (this.cutter.cooldown > 0) {
+      this.cutter.cooldown = Math.max(0, this.cutter.cooldown - delta);
+      this.cutter.target = null;
+      this.cutter.telegraph = 0;
+      return;
+    }
+
+    const preferredTargetIndex = this.cutter.target?.index;
+
+    if (!isCutterTargetValid(this.chain, this.cutter.target)) {
+      this.cutter.target = findValidCutterTarget(
+        this.chain,
+        preferredTargetIndex,
+      );
+      this.cutter.telegraph = 0;
+    } else {
+      this.cutter.target = findValidCutterTarget(
+        this.chain,
+        this.cutter.target.index,
+      );
+    }
+
+    const target = this.cutter.target;
+
+    if (!isCutterTargetValid(this.chain, target)) {
+      return;
+    }
+
+    this.cutter.telegraph += delta;
     const direction = normalize({
       x: target.point.x - this.cutter.pos.x,
       y: target.point.y - this.cutter.pos.y,
     });
-    this.cutter.vel.x += direction.x * delta * 3.2;
-    this.cutter.vel.y += direction.y * delta * 3.2;
+    this.cutter.vel.x += direction.x * delta * 4.6;
+    this.cutter.vel.y += direction.y * delta * 4.6;
     this.cutter.vel.x *= 0.96;
     this.cutter.vel.y *= 0.96;
     this.cutter.pos.x = clamp(
@@ -787,49 +986,27 @@ export class GameEngine {
       0.4,
       WORLD_SIZE - 0.4,
     );
-    this.cutter.targetIndex = target.index;
-
     if (
-      this.cutter.cooldown <= 0 &&
+      cutterTelegraphReady(this.cutter.telegraph) &&
       dist(this.cutter.pos, target.point) < 0.46
     ) {
       this.cutChain(target.index);
-      this.cutter.cooldown = 3.4;
-      this.cutter.pos.x = clamp(this.cutter.pos.x + 3.2, 0.8, WORLD_SIZE - 0.8);
     }
-  }
-
-  private cutterTarget(): { point: Vec2; index: number } {
-    if (this.lasso.mode === "anchored" && this.lasso.path.length > 3) {
-      const index = Math.floor(this.lasso.path.length * 0.55);
-
-      return {
-        point: this.lasso.path[index],
-        index: clamp(
-          Math.floor((this.lasso.length / CHAIN_SEGMENT_LENGTH) * 0.55),
-          5,
-          this.chain.length - 2,
-        ),
-      };
-    }
-
-    const index = clamp(
-      Math.floor(this.chain.length * 0.72),
-      5,
-      this.chain.length - 2,
-    );
-
-    return { point: this.chain[index].pos, index };
   }
 
   private cutChain(index: number) {
-    if (this.chain.length < 9) {
+    const { removed, cutPoint } = applySafeCut(this.chain, index, 3);
+
+    if (removed.length === 0 || !cutPoint) {
+      if (this.cutter) {
+        const reset = resetCutterTelegraph();
+        this.cutter.cooldown = reset.cooldown;
+        this.cutter.target = reset.target;
+        this.cutter.telegraph = reset.telegraph;
+      }
+
       return;
     }
-
-    const severIndex = clamp(Math.floor(index), 5, this.chain.length - 2);
-    const removed = this.chain.splice(severIndex);
-    const cutPoint = removed[0].pos;
 
     for (const link of removed) {
       link.dead = true;
@@ -846,10 +1023,17 @@ export class GameEngine {
       life: 6,
       maxLife: 6,
     });
-    this.cancelLasso();
+    this.knot = { mode: "idle" };
     this.audio.tone("sever");
     this.shake = Math.max(this.shake, 0.42);
     useGameUiStore.getState().setToast(`CHAIN SEVERED -${removed.length}`);
+
+    if (this.cutter) {
+      const reset = resetCutterTelegraph();
+      this.cutter.cooldown = reset.cooldown;
+      this.cutter.target = reset.target;
+      this.cutter.telegraph = reset.telegraph;
+    }
   }
 
   private resolveObserverAttack(attack: ObserverAttack) {
@@ -906,12 +1090,14 @@ export class GameEngine {
     this.phase = "reveal";
     this.phaseStartedAt = performance.now() / 1000;
     this.revealStage = -1;
-    this.cancelLasso();
+    this.knot = { mode: "idle" };
+    this.candidate = null;
     this.audio.fadeForReveal();
     this.audio.tone("reveal");
     this.updateTitle("DON'T MOVE");
     const store = useGameUiStore.getState();
     store.setPhase("reveal");
+    store.setSettingsVisible(false);
     store.setCaption("");
     store.setRevealMenu({
       title: strings.paused,
@@ -944,30 +1130,25 @@ export class GameEngine {
     this.audio.playVoice("back_again");
   }
 
-  private availableChainLength() {
-    return Math.max(0, (this.chain.length - 1) * CHAIN_SEGMENT_LENGTH);
-  }
-
   private updateDebug() {
     if (!isDevelopment || !useGameUiStore.getState().debugVisible) {
       return;
     }
 
-    const polygon = this.lasso.mode === "closed" ? this.lasso.polygon : [];
-    const activePathLength =
-      this.lasso.mode === "anchored" || this.lasso.mode === "closed"
-        ? pathLength(this.lasso.path)
-        : 0;
+    const polygon = this.knot.mode === "capturing" ? this.knot.polygon : [];
 
     useGameUiStore.getState().setDebug({
       fps: this.fps,
       step: this.simulationStep,
       chainLinks: this.chain.length,
-      pathLength: activePathLength,
-      enclosedArea: this.lasso.mode === "closed" ? this.lasso.area : 0,
+      knotSpan: this.lastKnotSpan,
+      knotArea: this.knot.mode === "capturing" ? this.knot.area : 0,
       cellsInside: polygon.length
         ? this.cells.filter((cell) => pointInPolygon(cell.pos, polygon)).length
         : 0,
+      cutterTarget: this.cutter?.target
+        ? String(this.cutter.target.index)
+        : "none",
       phase: this.phase,
     });
   }
@@ -984,7 +1165,9 @@ export class GameEngine {
       scars: this.scars,
       particles: this.particles,
       cutter: this.cutter,
-      lasso: this.lasso,
+      knot: this.knot,
+      candidate: this.candidate,
+      chainWave: this.chainWave,
       observerAttacks: this.observerAttacks,
       mouseScreen: this.input.mouseScreen,
       ghostRoute: this.captures === 0 ? this.ghostRoute : [],
@@ -1014,16 +1197,20 @@ export class GameEngine {
       });
     }
 
-    this.lasso = {
-      mode: "closed",
-      anchor: polygon[0],
-      path: polygon,
+    this.knot = {
+      mode: "capturing",
       polygon,
       area: polygonArea(polygon),
       center: polygonCentroid(polygon),
       progress: 0.98,
+      hitStop: 0,
+      capturedIds: this.cells
+        .filter((cell) => pointInPolygon(cell.pos, polygon))
+        .map((cell) => cell.id),
+      includesCutter:
+        this.cutter != null && pointInPolygon(this.cutter.pos, polygon),
     };
-    this.finishConstrict();
+    this.finishKnotCapture();
   }
 
   private installEvents() {
@@ -1047,23 +1234,11 @@ export class GameEngine {
   };
 
   private handlePointerDown = (event: MouseEvent) => {
-    if (event.button === 0) {
-      this.input.leftHeld = true;
-
-      if (this.phase === "playing" && this.lasso.mode === "idle") {
-        this.beginAnchor(this.input.mouseWorld);
-      }
-    }
-
-    if (event.button === 2) {
-      this.cancelLasso();
-    }
+    event.preventDefault();
   };
 
   private handlePointerUp = (event: MouseEvent) => {
-    if (event.button === 0) {
-      this.input.leftHeld = false;
-    }
+    event.preventDefault();
   };
 
   private handleContextMenu = (event: MouseEvent) => {
@@ -1073,18 +1248,19 @@ export class GameEngine {
   private handleKeyDown = (event: KeyboardEvent) => {
     const key = event.key.toLowerCase();
     this.input.keys.add(key);
+    this.applyMovementTapImpulse(key);
 
     if (key === " " && this.player.dashCooldown <= 0 && this.phase !== "menu") {
-      this.player.dashImpulse = 4.2;
-      this.player.dashCooldown = 0.9;
+      this.player.dashImpulse = 5.1;
+      this.player.dashCooldown = 0.66;
       this.audio.tone("dash");
     }
 
-    if (key === "r") {
+    if (isDevelopment && key === "r") {
       this.triggerRevelation();
     }
 
-    if (isDevelopment && key === "d") {
+    if (isDevelopment && event.key === "D") {
       useGameUiStore.getState().toggleDebug();
     }
 
@@ -1100,4 +1276,28 @@ export class GameEngine {
   private handleKeyUp = (event: KeyboardEvent) => {
     this.input.keys.delete(event.key.toLowerCase());
   };
+
+  private applyMovementTapImpulse(key: string) {
+    if (this.phase !== "playing" && this.phase !== "observer") {
+      return;
+    }
+
+    const direction =
+      key === "a" || key === "arrowleft"
+        ? { x: -1, y: 0 }
+        : key === "d" || key === "arrowright"
+          ? { x: 1, y: 0 }
+          : key === "w" || key === "arrowup"
+            ? { x: 0, y: -1 }
+            : key === "s" || key === "arrowdown"
+              ? { x: 0, y: 1 }
+              : null;
+
+    if (!direction) {
+      return;
+    }
+
+    this.player.vel.x += direction.x * 0.9;
+    this.player.vel.y += direction.y * 0.9;
+  }
 }

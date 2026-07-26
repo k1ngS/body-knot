@@ -2,16 +2,14 @@ export const strings = {
   title: "BODY//KNOT",
   eyebrow: "SUBJECT 32 // DORMANT",
   menuTag:
-    "Anchor a living chain. Encircle the immune response. Bind the host before it learns how you move.",
+    "Cross your living chain around immune cells. Grow before the host learns how you move.",
   enter: "ENTER HOST",
   settings: "SETTINGS",
   audioNotice: "CLICKING ENTER ENABLES AUDIO",
   prompts: {
-    anchor: "ANCHOR",
-    encircle: "ENCIRCLE",
-    return: "RETURN",
-    constrict: "HOLD TO CONSTRICT",
-    free: "CLOSE LOOPS. GROW THE CHAIN.",
+    circle: "CIRCLE THEM.",
+    cross: "CROSS THE GLOWING LINK.",
+    free: "CROSS THE CHAIN. TAKE MORE.",
     larger: "MAKE A LARGER KNOT.",
     cursor: "YOUR HAND IS WARM.",
   },
@@ -36,6 +34,7 @@ export const strings = {
     stable: "HOST SIGNAL // STABLE",
     contaminated: "HOST SIGNAL // CONTAMINATED",
     membrane: "MEMBRANE 32x32",
+    controls: "Space dashes. Cross your own chain.",
   },
   settingsLabels: {
     audio: "Audio",

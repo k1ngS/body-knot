@@ -3,7 +3,8 @@ import type {
   Cell,
   ChainLink,
   Cutter,
-  LassoState,
+  KnotCandidate,
+  KnotState,
   ObserverAttack,
   Particle,
   Player,
@@ -21,7 +22,9 @@ export type RenderSnapshot = {
   scars: Scar[];
   particles: Particle[];
   cutter: Cutter | null;
-  lasso: LassoState;
+  knot: KnotState;
+  candidate: KnotCandidate | null;
+  chainWave: number;
   observerAttacks: ObserverAttack[];
   mouseScreen: Vec2;
   ghostRoute: Vec2[];
@@ -96,13 +99,21 @@ export class CanvasRenderer {
     this.drawBackground(snapshot);
     this.drawScars(snapshot.scars);
     this.drawGhost(snapshot);
-    this.drawCells(snapshot.cells, snapshot.time, snapshot.phase !== "playing");
-    this.drawLasso(snapshot);
-    this.drawChain(snapshot.chain, false);
-    this.drawChain(snapshot.severed, true);
+    this.drawCells(
+      snapshot.cells,
+      snapshot.time,
+      snapshot.phase !== "playing",
+      new Set(snapshot.candidate?.cellIds ?? []),
+    );
+    this.drawCutterTelegraph(snapshot);
+    this.drawKnot(snapshot);
+    this.drawKnotGate(snapshot);
+    this.drawChain(snapshot.chain, false, snapshot.chainWave);
+    this.drawChain(snapshot.severed, true, 0);
     this.drawCutter(snapshot.cutter, snapshot.time);
     this.drawPlayer(snapshot.player, snapshot.phase === "observer");
     this.drawParticles(snapshot.particles);
+    this.drawCursorPresence(snapshot);
 
     if (
       snapshot.phase === "reveal" ||
@@ -210,7 +221,12 @@ export class CanvasRenderer {
     context.restore();
   }
 
-  private drawCells(cells: Cell[], time: number, red: boolean) {
+  private drawCells(
+    cells: Cell[],
+    time: number,
+    red: boolean,
+    candidateCellIds: Set<number>,
+  ) {
     const { context } = this;
 
     for (const cell of cells) {
@@ -221,11 +237,13 @@ export class CanvasRenderer {
       context.translate(screen.x, screen.y);
       context.scale(pulse, pulse);
 
-      if (cell.highlighted) {
-        context.strokeStyle = "#c9fbff88";
-        context.lineWidth = 2;
+      const isCandidate = candidateCellIds.has(cell.id);
+
+      if (cell.highlighted || isCandidate) {
+        context.strokeStyle = isCandidate ? "#a8fbffcc" : "#c9fbff77";
+        context.lineWidth = isCandidate ? 2.4 : 1.6;
         context.beginPath();
-        context.arc(0, 0, radius * 1.9, 0, Math.PI * 2);
+        context.arc(0, 0, radius * (isCandidate ? 2.12 : 1.62), 0, Math.PI * 2);
         context.stroke();
       }
 
@@ -284,7 +302,7 @@ export class CanvasRenderer {
     }
   }
 
-  private drawChain(chain: ChainLink[], dead: boolean) {
+  private drawChain(chain: ChainLink[], dead: boolean, chainWave: number) {
     if (chain.length < 2) {
       return;
     }
@@ -293,8 +311,8 @@ export class CanvasRenderer {
     context.save();
     context.lineCap = "round";
     context.lineJoin = "round";
-    context.strokeStyle = dead ? "#321013aa" : "#738080";
-    context.lineWidth = dead ? 3 : 4;
+    context.strokeStyle = dead ? "#321013aa" : "#61706faa";
+    context.lineWidth = dead ? 3 : 3.3;
     context.beginPath();
 
     for (const [index, link] of chain.entries()) {
@@ -309,45 +327,150 @@ export class CanvasRenderer {
 
     context.stroke();
 
-    for (const link of chain) {
+    for (const [index, link] of chain.entries()) {
       const screen = this.worldToScreen(link.pos);
-      const radius = link.kind === "platelet" ? 0.13 : 0.105;
+      const firstLink = !dead && index <= 2;
+      const distanceFade = dead
+        ? 1
+        : clamp(1 - (index / chain.length) * 0.5, 0.42, 1);
+      const wavePosition = 1 - chainWave;
+      const wave =
+        chainWave > 0
+          ? Math.max(
+              0,
+              1 -
+                Math.abs(index / Math.max(1, chain.length - 1) - wavePosition) *
+                  7,
+            )
+          : 0;
+      const radius =
+        (link.kind === "platelet" ? 0.13 : 0.105) *
+        (firstLink ? 1.45 : 1) *
+        (1 + wave * 0.55);
+      context.globalAlpha = dead ? 1 : distanceFade;
       context.fillStyle = dead ? "#2b0b0e" : this.linkColor(link.kind);
       context.beginPath();
       context.arc(screen.x, screen.y, radius * this.scale, 0, Math.PI * 2);
       context.fill();
+
+      if (firstLink || wave > 0.1) {
+        context.strokeStyle = firstLink ? "#ecfffbcc" : "#cfffffaa";
+        context.lineWidth = firstLink ? 1.3 : 1;
+        context.beginPath();
+        context.arc(
+          screen.x,
+          screen.y,
+          radius * this.scale * (firstLink ? 1.65 : 1.9),
+          0,
+          Math.PI * 2,
+        );
+        context.stroke();
+      }
     }
 
+    context.globalAlpha = 1;
     context.restore();
   }
 
-  private drawLasso(snapshot: RenderSnapshot) {
-    const { context } = this;
+  private drawKnotGate(snapshot: RenderSnapshot) {
+    const candidate = snapshot.candidate;
 
-    if (snapshot.lasso.mode === "idle") {
+    if (!candidate || snapshot.phase !== "playing") {
       return;
     }
 
-    const path =
-      snapshot.lasso.mode === "closed"
-        ? snapshot.lasso.polygon
-        : snapshot.lasso.path;
+    const a = snapshot.chain[candidate.targetIndex];
+    const b = snapshot.chain[candidate.targetIndex + 1];
+
+    if (!a || !b) {
+      return;
+    }
+
+    const { context } = this;
+    const pulse = snapshot.reducedMotion
+      ? 0.7
+      : 0.62 + Math.sin(candidate.pulse * 2.2) * 0.24;
+    context.save();
+    context.lineCap = "round";
+    context.lineJoin = "round";
+
+    if (candidate.cellIds.length > 0 && candidate.polygon.length > 2) {
+      context.globalAlpha = 0.08 + pulse * 0.05;
+      context.fillStyle = snapshot.highContrast ? "#ffffff" : "#9cf2ff";
+      context.beginPath();
+
+      for (const [index, point] of candidate.polygon.entries()) {
+        const screen = this.worldToScreen(point);
+
+        if (index === 0) {
+          context.moveTo(screen.x, screen.y);
+        } else {
+          context.lineTo(screen.x, screen.y);
+        }
+      }
+
+      context.closePath();
+      context.fill();
+    }
+
+    context.globalAlpha = 1;
+    const start = this.worldToScreen(a.pos);
+    const end = this.worldToScreen(b.pos);
+    context.strokeStyle = snapshot.highContrast
+      ? `rgba(255, 255, 255, ${0.65 + pulse * 0.25})`
+      : `rgba(156, 242, 255, ${0.55 + pulse * 0.32})`;
+    context.lineWidth = 7;
+    context.beginPath();
+    context.moveTo(start.x, start.y);
+    context.lineTo(end.x, end.y);
+    context.stroke();
+
+    const point = this.worldToScreen(candidate.point);
+    context.translate(point.x, point.y);
+    context.rotate(candidate.pulse * 0.35);
+    context.strokeStyle = candidate.cellIds.length > 0 ? "#eaffff" : "#91a7aa";
+    context.lineWidth = 2;
+    const marker = 8 + pulse * 5;
+    context.beginPath();
+    context.moveTo(-marker, -marker);
+    context.lineTo(marker, marker);
+    context.moveTo(marker, -marker);
+    context.lineTo(-marker, marker);
+    context.stroke();
+    context.beginPath();
+    context.arc(0, 0, marker * 1.35, -Math.PI * 0.25, Math.PI * 1.15);
+    context.stroke();
+    context.restore();
+  }
+
+  private drawKnot(snapshot: RenderSnapshot) {
+    const { context } = this;
+
+    if (snapshot.knot.mode === "idle") {
+      return;
+    }
+
+    const path = snapshot.knot.polygon;
 
     if (path.length < 2) {
       return;
     }
 
-    const tension =
-      snapshot.lasso.mode === "anchored" ? snapshot.lasso.tension : 0;
+    const progress = snapshot.knot.progress;
     context.save();
     context.lineCap = "round";
     context.lineJoin = "round";
-    context.strokeStyle = `rgba(${145 + tension * 100}, ${210 - tension * 80}, 230, ${0.75 + tension * 0.2})`;
-    context.lineWidth = 3 + tension * 3;
+    context.strokeStyle = `rgba(190, 250, 255, ${0.9 - progress * 0.32})`;
+    context.lineWidth = 6 - progress * 2.5;
     context.beginPath();
 
     for (const [index, point] of path.entries()) {
-      const screen = this.worldToScreen(point);
+      const contracted = lerpWorld(
+        point,
+        snapshot.knot.center,
+        progress * 0.55,
+      );
+      const screen = this.worldToScreen(contracted);
 
       if (index === 0) {
         context.moveTo(screen.x, screen.y);
@@ -356,34 +479,43 @@ export class CanvasRenderer {
       }
     }
 
-    if (snapshot.lasso.mode === "closed") {
-      context.closePath();
-      const progress = snapshot.lasso.progress;
-      const center = this.worldToScreen(snapshot.lasso.center);
-      context.globalAlpha = 0.1 + progress * 0.18;
-      context.fillStyle = "#a7f7ff";
-      context.fill();
-      context.globalAlpha = 1;
-      context.stroke();
-      context.strokeStyle = "#f4ffff";
-      context.lineWidth = 1;
-      context.beginPath();
-      context.arc(
-        center.x,
-        center.y,
-        (1 - progress * 0.62) * this.scale * 1.3,
-        0,
-        Math.PI * 2,
-      );
-      context.stroke();
-    } else {
-      context.stroke();
-      const anchor = this.worldToScreen(snapshot.lasso.anchor);
-      context.fillStyle = "#d9ffff";
-      context.beginPath();
-      context.arc(anchor.x, anchor.y, 0.22 * this.scale, 0, Math.PI * 2);
-      context.fill();
+    context.closePath();
+    context.globalAlpha = 0.13 + (1 - progress) * 0.14;
+    context.fillStyle =
+      snapshot.knot.capturedIds.length > 1 ? "#c8ffff" : "#a7f7ff";
+    context.fill();
+    context.globalAlpha = 1;
+    context.stroke();
+    context.restore();
+  }
+
+  private drawCutterTelegraph(snapshot: RenderSnapshot) {
+    if (!snapshot.cutter?.target) {
+      return;
     }
+
+    const target = snapshot.cutter.target;
+    const a = snapshot.chain[target.index];
+    const b = snapshot.chain[target.index + 1];
+
+    if (!a || !b) {
+      return;
+    }
+
+    const { context } = this;
+    const start = this.worldToScreen(a.pos);
+    const end = this.worldToScreen(b.pos);
+    const pulse = snapshot.reducedMotion
+      ? 0.7
+      : 0.45 + Math.sin(snapshot.time * 12) * 0.25;
+    context.save();
+    context.lineCap = "round";
+    context.strokeStyle = `rgba(226, 43, 62, ${0.45 + pulse})`;
+    context.lineWidth = 8;
+    context.beginPath();
+    context.moveTo(start.x, start.y);
+    context.lineTo(end.x, end.y);
+    context.stroke();
 
     context.restore();
   }
@@ -416,20 +548,44 @@ export class CanvasRenderer {
     const { context } = this;
     const screen = this.worldToScreen(player.pos);
     const direction = normalize(player.vel);
+    const radius = player.radius * this.scale * 1.32;
     context.save();
+    context.fillStyle = horror ? "#6f111aaa" : "#dffbff18";
+    context.beginPath();
+    context.arc(screen.x, screen.y, radius * 1.85, 0, Math.PI * 2);
+    context.fill();
     context.translate(screen.x, screen.y);
     context.rotate(Math.atan2(direction.y, direction.x) + Math.PI / 2);
     context.fillStyle = horror ? "#ded3c7" : "#bec8c5";
     context.strokeStyle = horror ? "#b72935" : "#ecfffb";
-    context.lineWidth = 1.5;
+    context.lineWidth = 1.8;
     context.beginPath();
-    context.moveTo(0, -player.radius * this.scale * 1.45);
-    context.lineTo(player.radius * this.scale, player.radius * this.scale);
-    context.lineTo(0, player.radius * this.scale * 0.48);
-    context.lineTo(-player.radius * this.scale, player.radius * this.scale);
+    context.moveTo(0, -radius * 1.64);
+    context.bezierCurveTo(
+      radius * 0.96,
+      -radius * 0.86,
+      radius * 1.08,
+      radius * 0.42,
+      radius * 0.44,
+      radius * 1.02,
+    );
+    context.lineTo(0, radius * 0.48);
+    context.lineTo(-radius * 0.44, radius * 1.02);
+    context.bezierCurveTo(
+      -radius * 1.08,
+      radius * 0.42,
+      -radius * 0.96,
+      -radius * 0.86,
+      0,
+      -radius * 1.64,
+    );
     context.closePath();
     context.fill();
     context.stroke();
+    context.fillStyle = horror ? "#9b202b" : "#f3fffb";
+    context.beginPath();
+    context.arc(0, 0, radius * 0.28, 0, Math.PI * 2);
+    context.fill();
     context.restore();
   }
 
@@ -490,6 +646,38 @@ export class CanvasRenderer {
     }
 
     context.globalAlpha = 1;
+  }
+
+  private drawCursorPresence(snapshot: RenderSnapshot) {
+    if (
+      snapshot.phase !== "playing" &&
+      snapshot.phase !== "reveal" &&
+      snapshot.phase !== "observer"
+    ) {
+      return;
+    }
+
+    const { context } = this;
+    const red = snapshot.phase === "reveal" || snapshot.phase === "observer";
+    const pulse = snapshot.reducedMotion ? 0 : Math.sin(snapshot.time * 8) * 2;
+    context.save();
+    context.translate(snapshot.mouseScreen.x, snapshot.mouseScreen.y);
+    context.strokeStyle = red ? "#8f1d29cc" : "#b7c0c188";
+    context.lineWidth = red ? 1.8 : 1.2;
+    context.beginPath();
+    context.arc(0, 0, red ? 15 + pulse : 6, 0, Math.PI * 2);
+    context.stroke();
+    context.beginPath();
+    context.moveTo(red ? -22 : -9, 0);
+    context.lineTo(red ? -9 : -3, 0);
+    context.moveTo(red ? 9 : 3, 0);
+    context.lineTo(red ? 22 : 9, 0);
+    context.moveTo(0, red ? -22 : -9);
+    context.lineTo(0, red ? -9 : -3);
+    context.moveTo(0, red ? 9 : 3);
+    context.lineTo(0, red ? 22 : 9);
+    context.stroke();
+    context.restore();
   }
 
   private drawEye(snapshot: RenderSnapshot) {
@@ -687,3 +875,8 @@ export class CanvasRenderer {
     return "#9aa8a6";
   }
 }
+
+const lerpWorld = (a: Vec2, b: Vec2, amount: number): Vec2 => ({
+  x: a.x + (b.x - a.x) * amount,
+  y: a.y + (b.y - a.y) * amount,
+});

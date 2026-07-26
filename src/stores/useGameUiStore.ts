@@ -18,9 +18,10 @@ export type DebugSnapshot = {
   fps: number;
   step: number;
   chainLinks: number;
-  pathLength: number;
-  enclosedArea: number;
+  knotSpan: number;
+  knotArea: number;
   cellsInside: number;
+  cutterTarget: string;
   phase: string;
 };
 
@@ -53,6 +54,7 @@ type GameUiState = {
   setToast: (text: string) => void;
   setRevealMenu: (menu: RevealMenu) => void;
   setDebugVisible: (visible: boolean) => void;
+  setSettingsVisible: (visible: boolean) => void;
   toggleDebug: () => void;
   toggleSettings: () => void;
   setSettings: (settings: Partial<GameSettings>) => void;
@@ -74,9 +76,10 @@ const defaultDebug: DebugSnapshot = {
   fps: 0,
   step: 0,
   chainLinks: 0,
-  pathLength: 0,
-  enclosedArea: 0,
+  knotSpan: 0,
+  knotArea: 0,
   cellsInside: 0,
+  cutterTarget: "none",
   phase: "menu",
 };
 
@@ -99,15 +102,24 @@ export const useGameUiStore = create<GameUiState>((set) => ({
   setPrompt: (prompt) => set({ prompt }),
   setCaption: (caption) => set({ caption }),
   setClock: (clock) => set({ clock }),
-  setToast: (text) =>
+  setToast: (text) => {
+    const id = Date.now();
     set({
       captureToast: {
-        id: Date.now(),
+        id,
         text,
       },
-    }),
+    });
+
+    window.setTimeout(() => {
+      set((state) =>
+        state.captureToast?.id === id ? { captureToast: null } : state,
+      );
+    }, 1500);
+  },
   setRevealMenu: (revealMenu) => set({ revealMenu }),
   setDebugVisible: (debugVisible) => set({ debugVisible }),
+  setSettingsVisible: (settingsVisible) => set({ settingsVisible }),
   toggleDebug: () => set((state) => ({ debugVisible: !state.debugVisible })),
   toggleSettings: () =>
     set((state) => ({ settingsVisible: !state.settingsVisible })),
@@ -121,6 +133,8 @@ export const useGameUiStore = create<GameUiState>((set) => ({
       caption: "",
       clock: "00:00",
       captureToast: null,
+      debugVisible: false,
+      settingsVisible: false,
       revealMenu: {
         title: "PAUSED",
         resume: "RESUME",

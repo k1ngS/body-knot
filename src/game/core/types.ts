@@ -43,7 +43,13 @@ export type Cutter = {
   vel: Vec2;
   cooldown: number;
   alive: boolean;
-  targetIndex: number;
+  target: CutterTarget | null;
+  telegraph: number;
+};
+
+export type CutterTarget = {
+  index: number;
+  point: Vec2;
 };
 
 export type ObserverAttack = {
@@ -53,26 +59,30 @@ export type ObserverAttack = {
   hit: boolean;
 };
 
-export type LassoState =
+export type KnotState =
   | {
       mode: "idle";
     }
   | {
-      mode: "anchored";
-      anchor: Vec2;
-      path: Vec2[];
-      length: number;
-      tension: number;
-    }
-  | {
-      mode: "closed";
-      anchor: Vec2;
-      path: Vec2[];
+      mode: "capturing";
       polygon: Vec2[];
       area: number;
       center: Vec2;
       progress: number;
+      hitStop: number;
+      capturedIds: number[];
+      includesCutter: boolean;
     };
+
+export type KnotCandidate = {
+  targetIndex: number;
+  point: Vec2;
+  polygon: Vec2[];
+  center: Vec2;
+  area: number;
+  cellIds: number[];
+  pulse: number;
+};
 
 export type Player = {
   pos: Vec2;
