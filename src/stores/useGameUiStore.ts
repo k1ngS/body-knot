@@ -77,7 +77,7 @@ const defaultSettings: GameSettings = {
   screenShake: true,
   highContrast: false,
   musicVolume: 1,
-  voiceVolume: 1,
+  voiceVolume: 0.85,
   effectsVolume: 1,
 };
 

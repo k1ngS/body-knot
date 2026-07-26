@@ -2558,12 +2558,16 @@ export class GameEngine {
     this.endingOutcome = "failure";
     this.audio.setObserverMode(false);
     this.audio.signalSever();
-    this.audio.playVoice("signal_severed");
+    window.setTimeout(() => {
+      if (this.phase === "ending" && this.endingOutcome === "failure") {
+        this.audio.playVoice("signal_severed");
+      }
+    }, 180);
     window.setTimeout(() => {
       if (this.phase === "ending" && this.endingOutcome === "failure") {
         this.audio.playVoice("host_rejected");
       }
-    }, 1550);
+    }, 1730);
     this.audio.tone("sever");
     this.updateTitle("SIGNAL SEVERED");
     const store = useGameUiStore.getState();

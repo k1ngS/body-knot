@@ -36,7 +36,7 @@ const sfxAssets = {
 const baseLoopVolumes = {
   ambience: 0.21,
   heartbeat: 0.1,
-  revelationBed: 0.25,
+  revelationBed: 0.2,
 } satisfies Record<LoopKey, number>;
 
 export class AudioDirector {
@@ -184,7 +184,7 @@ export class AudioDirector {
 
   startRevelation() {
     this.fadeForReveal();
-    this.playSfx("eyeOpen", 0.5);
+    this.playSfx("eyeOpen", 0.38);
   }
 
   restoreAfterReveal() {
@@ -240,7 +240,7 @@ export class AudioDirector {
   }
 
   signalSever() {
-    this.playSfx("signalSever", 0.78);
+    this.playSfx("signalSever", 0.6);
   }
 
   tone(
