@@ -1,0 +1,10 @@
+export const WORLD_SIZE = 32;
+export const FIXED_TIMESTEP = 1 / 60;
+export const CHAIN_SEGMENT_LENGTH = 0.58;
+export const INITIAL_LINKS = 15;
+export const MIN_LOOP_LENGTH = 5.2;
+export const MIN_LOOP_AREA = 3.3;
+export const PATH_RECORD_DISTANCE = 0.24;
+export const LOOP_CLOSE_DISTANCE = 0.92;
+export const REVELATION_TIME = 60;
+export const OBSERVER_DURATION = 18;
