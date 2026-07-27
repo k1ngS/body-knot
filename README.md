@@ -5,7 +5,7 @@
 ## Play
 
 **Live build:** https://body-knot.vercel.app
-**itch.io:** https://k1ings.itch.io/body-knot
+**itch.io:** https://k1ngs.itch.io/body-knot
 **Game Jam submission:** Submission pending
 
 BODY//KNOT is free to play in a desktop web browser. No login or download is required.
@@ -86,24 +86,11 @@ npm run build
 
 ## Itch.io Static Build
 
-The standard `npm run build` remains the Vercel-oriented production build.
+After building, package the contents of `out-itch/` as a ZIP.
 
-To generate the real Vite-based static HTML build for itch.io:
-
-```bash
-npm run build:itch
-```
-
-This writes the exported game to `out-itch/`.
-
-On Windows, package the upload ZIP with:
-
-```powershell
-npm run package:itch
-```
-
-The ZIP is written to `dist/BODY_KNOT_itch.zip` and contains the contents of
-`out-itch/` at the archive root.
+`index.html`, `assets/`, `audio/` and `favicon.ico` must appear directly
+at the archive root. Do not place the `out-itch/` directory itself
+inside the ZIP.
 
 ## Audio
 
