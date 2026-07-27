@@ -4,9 +4,9 @@
 
 ## Play
 
-**Live build:** body-knot.vercel.app 
-**Game Jam page:** _add the vibecode.game URL here_  
-**itch.io:** _optional — add later_
+**Live build:** https://body-knot.vercel.app
+**itch.io:** https://k1ings.itch.io/body-knot
+**Game Jam submission:** Submission pending
 
 BODY//KNOT is free to play in a desktop web browser. No login or download is required.
 
@@ -34,28 +34,29 @@ The final phase changes the relationship between player, cursor and body: distra
 | `WASD` / Arrow Keys | Move |
 | `Space` | Dash |
 | Mouse | Move Focus / bait the Observer |
-| `Esc` | Pause / close settings |
+| `Esc` | Pause/resume during the main phase; close Settings |
 
 ## Features
 
 - Continuous self-knotting mechanic inside a logical 32×32 arena
-- Physical segmented living chain
+- Simulated segmented living chain
 - Mouse Focus that gently gathers ordinary cells
 - Live capture preview and candidate highlighting
 - Cutter enemy that telegraphs and severs threatened links
-- Persistent necrotic scars from severed connections
-- Fourth-wall horror reveal with local voice acting
+- Visible severed chain remnants and temporary necrotic impact scars
+- Fourth-wall horror reveal with locally hosted synthetic voice narration
 - Final two-input challenge: move the body while distracting the eye
 - Original procedural ambience and sound effects
-- Music, voice and SFX sliders
-- Captions, reduced motion, contrast and screen-shake options
-- English, Portuguese and Spanish interface support
+- Ambience, voice and SFX volume controls
+- Captions, reduced motion, high contrast and screen-shake options
+- Desktop browser experience with no login or download
 
 ## Technology
 
 - Next.js
 - React
 - TypeScript
+- Tailwind CSS
 - Zustand
 - HTML5 Canvas 2D
 - Web Audio API
@@ -82,6 +83,27 @@ Production checks:
 npm run lint
 npm run build
 ```
+
+## Itch.io Static Build
+
+The standard `npm run build` remains the Vercel-oriented production build.
+
+To generate the real Vite-based static HTML build for itch.io:
+
+```bash
+npm run build:itch
+```
+
+This writes the exported game to `out-itch/`.
+
+On Windows, package the upload ZIP with:
+
+```powershell
+npm run package:itch
+```
+
+The ZIP is written to `dist/BODY_KNOT_itch.zip` and contains the contents of
+`out-itch/` at the archive root.
 
 ## Audio
 
@@ -110,22 +132,22 @@ Selected evidence is available in [`docs/screenshots/`](./docs/screenshots/) and
 
 ## Credits
 
-**Design and Development**  
+**Design and Development**
 Marcos Beltrão — Shadowchar Studio
 
-**Game Design Collaboration**  
+**Game Design Collaboration**
 Game Designer Mind — Minds by Animoca Brands
 
-**Development Assistance**  
+**Development Assistance**
 ChatGPT, OpenAI Codex and ChatGPT Game Studio
 
-**Voice**  
+**Voice**
 Generated with Gemini Text-to-Speech
 
-**Voice Direction and Audio Editing**  
+**Voice Direction and Audio Editing**
 Marcos Beltrão
 
-**Original Procedural Sound Design**  
+**Original Procedural Sound Design**
 Marcos Beltrão with ChatGPT
 
 ## Release

@@ -95,6 +95,8 @@ const HOST_CORE_EYE_EXCLUSION = {
 };
 const HOST_CORE_EYE_EXCLUSION_MARGIN = HOST_CORE_RADIUS * 2.55;
 const FINAL_ROUTE_ANGLE_REQUIRED = (Math.PI * 4) / 3;
+const NATIVE_INTERACTION_SELECTOR =
+  'input, button, select, textarea, a, label, [role="button"], [role="slider"]';
 
 export class GameEngine {
   private renderer: CanvasRenderer;
@@ -2882,10 +2884,18 @@ export class GameEngine {
   };
 
   private handlePointerDown = (event: MouseEvent) => {
+    if (isNativeInteractionTarget(event.target)) {
+      return;
+    }
+
     event.preventDefault();
   };
 
   private handlePointerUp = (event: MouseEvent) => {
+    if (isNativeInteractionTarget(event.target)) {
+      return;
+    }
+
     event.preventDefault();
   };
 
@@ -3028,5 +3038,9 @@ const distanceToRect = (
 
   return Math.hypot(dx, dy);
 };
+
+const isNativeInteractionTarget = (target: EventTarget | null) =>
+  target instanceof Element &&
+  target.closest(NATIVE_INTERACTION_SELECTOR) !== null;
 
 const cross = (a: Vec2, b: Vec2) => a.x * b.y - a.y * b.x;
