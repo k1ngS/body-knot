@@ -36,7 +36,7 @@ The final exported files are stored in:
 
 - Ambience and selected SFX: mono or stereo according to purpose
 
-  
+
 
 Generated as original procedural audio for this project. No external samples were used.
 No attribution is required for these files.
@@ -60,7 +60,7 @@ RECOMMENDED REVEAL TIMELINE
 10.75  you_are.wav
 12.90  enable RUN / LET ME OUT
 
-MIX STARTING POINTS
+Original Mix Starting Points
 - Voice channel: 1.00
 - revelation_voice_bed_13s.wav: 0.22–0.32
 - ambience loop while voice is active: 0.20–0.30

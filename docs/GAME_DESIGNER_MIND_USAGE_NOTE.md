@@ -1,3 +1,3 @@
-# Suggested Game Designer Mind Usage Note
+# Game Designer Mind Usage Note
 
 The Game Designer Mind was a recurring design collaborator across the project lineage that evolved from PATCH32 into BODY//KNOT. After an early prototype failed playtesting, it reframed the fantasy around an infected 32×32 system and an immune response, explored reactive cable topology, and repeatedly reviewed the design for strategic depth, first-90-second clarity, accessibility, minimalism, and Game Jam judge impact. Several Mind-recommended prototypes were implemented and then rejected when testing showed they were too passive or shallow. BODY//KNOT retained the strongest foundations—parasite pressure, living connections, severance, constrained short-form play, and a system that becomes visibly alive—while the final self-knot mechanic, Focus cursor, eye reveal, Host Core finale, implementation, and release decisions remained under human direction with support from ChatGPT and Codex.
