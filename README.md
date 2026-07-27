@@ -5,7 +5,7 @@
 ## Play
 
 **Live build:** https://body-knot.vercel.app
-**itch.io:** https://k1ngs.itch.io/body-knot
+**itch.io:** https://k1ings.itch.io/body-knot
 **Game Jam submission:** Submission pending
 
 BODY//KNOT is free to play in a desktop web browser. No login or download is required.
