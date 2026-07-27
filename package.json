@@ -5,6 +5,8 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "build:itch": "vite build --config vite.itch.config.ts",
+    "package:itch": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-itch.ps1",
     "start": "next start",
     "lint": "biome check",
     "format": "biome format --write"
@@ -21,7 +23,9 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@vitejs/plugin-react": "^6.0.4",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vite": "^8.1.5"
   }
 }

@@ -16,9 +16,13 @@
 # next.js
 /.next/
 /out/
+/out-itch/
 
 # production
 /build
+/dist/
+/.itch-test/
+/.itch-package/
 
 # misc
 .DS_Store

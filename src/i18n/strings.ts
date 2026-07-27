@@ -1,3 +1,5 @@
+import { publicAsset } from "@/lib/publicAsset";
+
 export const strings = {
   title: "BODY//KNOT",
   eyebrow: "SUBJECT 32 // DORMANT",
@@ -51,24 +53,24 @@ export const strings = {
     reducedMotion: "Reduced motion",
     shake: "Screen shake",
     highContrast: "High contrast",
-    music: "Music",
+    music: "Ambience",
     voice: "Voice",
     effects: "SFX",
   },
 };
 
 export const voiceClips = {
-  get_out: "/audio/voice/get_out.wav",
-  host_bound: "/audio/voice/host_bound.wav",
-  host_rejected: "/audio/voice/host_rejected.wav",
-  it_moves: "/audio/voice/it_moves.wav",
-  let_me_out: "/audio/voice/let_me_out.wav",
-  motor_control: "/audio/voice/motor_control.wav",
-  never_outside: "/audio/voice/never_outside.wav",
-  not_the_parasite: "/audio/voice/not_the_parasite.wav",
-  see_the_hand: "/audio/voice/see_the_hand.wav",
-  signal_severed: "/audio/voice/signal_severed.wav",
-  you_are: "/audio/voice/you_are.wav",
+  get_out: publicAsset("audio/voice/get_out.wav"),
+  host_bound: publicAsset("audio/voice/host_bound.wav"),
+  host_rejected: publicAsset("audio/voice/host_rejected.wav"),
+  it_moves: publicAsset("audio/voice/it_moves.wav"),
+  let_me_out: publicAsset("audio/voice/let_me_out.wav"),
+  motor_control: publicAsset("audio/voice/motor_control.wav"),
+  never_outside: publicAsset("audio/voice/never_outside.wav"),
+  not_the_parasite: publicAsset("audio/voice/not_the_parasite.wav"),
+  see_the_hand: publicAsset("audio/voice/see_the_hand.wav"),
+  signal_severed: publicAsset("audio/voice/signal_severed.wav"),
+  you_are: publicAsset("audio/voice/you_are.wav"),
 } as const;
 
 export type VoiceClipKey = keyof typeof voiceClips;

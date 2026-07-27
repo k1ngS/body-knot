@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import { publicAsset } from "@/lib/publicAsset";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -14,7 +15,11 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "BODY//KNOT",
-  description: "A 90-second browser vertical slice about a living chain.",
+  description:
+    "A short browser horror game about knotting a living chain inside a host that learns your cursor.",
+  icons: {
+    icon: publicAsset("favicon.ico"),
+  },
 };
 
 export default function RootLayout({

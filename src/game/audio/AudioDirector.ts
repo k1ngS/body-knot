@@ -1,4 +1,5 @@
 import { type VoiceClipKey, voiceClips } from "@/i18n/strings";
+import { publicAsset } from "@/lib/publicAsset";
 import { type GameSettings, useGameUiStore } from "@/stores/useGameUiStore";
 
 type OscillatorBundle = {
@@ -20,17 +21,17 @@ type SfxKey =
   | "youArePressure";
 
 const loopAssets = {
-  ambience: "/audio/ambience/ambience_organic_loop_16s.wav",
-  heartbeat: "/audio/ambience/heartbeat_loop_12s.wav",
-  revelationBed: "/audio/ambience/revelation_voice_bed_13s.wav",
+  ambience: publicAsset("audio/ambience/ambience_organic_loop_16s.wav"),
+  heartbeat: publicAsset("audio/ambience/heartbeat_loop_12s.wav"),
+  revelationBed: publicAsset("audio/ambience/revelation_voice_bed_13s.wav"),
 } satisfies Record<LoopKey, string>;
 
 const sfxAssets = {
-  eyeOpen: "/audio/sfx/sfx_eye_open.wav",
-  hostBind: "/audio/sfx/sfx_host_bind.wav",
-  observerLock: "/audio/sfx/sfx_observer_lock.wav",
-  signalSever: "/audio/sfx/sfx_signal_sever.wav",
-  youArePressure: "/audio/sfx/sfx_you_are_pressure.wav",
+  eyeOpen: publicAsset("audio/sfx/sfx_eye_open.wav"),
+  hostBind: publicAsset("audio/sfx/sfx_host_bind.wav"),
+  observerLock: publicAsset("audio/sfx/sfx_observer_lock.wav"),
+  signalSever: publicAsset("audio/sfx/sfx_signal_sever.wav"),
+  youArePressure: publicAsset("audio/sfx/sfx_you_are_pressure.wav"),
 } satisfies Record<SfxKey, string>;
 
 const baseLoopVolumes = {
